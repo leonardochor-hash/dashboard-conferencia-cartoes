@@ -1,22 +1,12 @@
 {
   "builds": [
-    {
-      "src": "index.html",
-      "use": "@vercel/static"
-    },
-    {
-      "src": "api/conferir.py",
-      "use": "@vercel/python"
-    }
+    { "src": "index.html", "use": "@vercel/static" },
+    { "src": "api/conferir.py", "use": "@vercel/python" },
+    { "src": "api/aprovar.py", "use": "@vercel/python" }
   ],
   "routes": [
-    {
-      "src": "/api/conferir",
-      "dest": "/api/conferir.py"
-    },
-    {
-      "src": "/",
-      "dest": "/index.html"
-    }
+    { "src": "/api/conferir", "dest": "/api/conferir.py" },
+    { "src": "/api/aprovar", "dest": "/api/aprovar.py" },
+    { "src": "/", "dest": "/index.html" }
   ]
 }
