@@ -105,28 +105,37 @@ class MoomboxClient:
     def buscar_relatorio_pagamento(self, data_ref: date):
         """
         Baixa o relatório-tipo-pagamento do dia.
-        Retorna lista de dicts: {loja_id, cupom, hora, cod_aut, valor, forma_pagto}
+        Retorna lista de dicts com itens individuais de pagamento.
+
+        Como a coluna 'Cod Autoriza' do LivePDV pode conter VÁRIOS pagamentos
+        concatenados (cod - valor - data - tipo - parcelas), expandimos cada linha
+        do cupom em vários itens (um por pagamento).
         """
-        url = f"{BASE_URL}/relatorios/relatorio-tipo-pagamento"
+        url = f"{BASE_URL}/relatorios/relatorio-tipo-pagamento/index"
+        data_str = data_ref.strftime("%d/%m/%Y")
         params = {
-            "data_inicio": data_ref.strftime("%d/%m/%Y"),
-            "data_fim": data_ref.strftime("%d/%m/%Y"),
+            "RelatorioTipoPagamentoForm[data]": f"{data_str} - {data_str}",
+            "_togd9a55727": "all",  # "Ver todos" - trás todas as linhas
         }
+        log(f"GET relatorio-tipo-pagamento ({data_str})")
         r = self.session.get(url, params=params, timeout=30)
+        log(f"GET resposta: status={r.status_code}")
         r.raise_for_status()
         return _parse_relatorio_pagamento(r.text)
 
     def buscar_zoop_financeiro(self, data_ref: date):
         """
         Baixa o financeiro Zoop do dia (só status=succeeded).
-        Retorna lista de dicts: {loja_id, zoop_id, valor, status, bandeira, tipo_pagamento, hora}
         """
         url = f"{BASE_URL}/zoop/financeiro"
+        data_str = data_ref.strftime("%d/%m/%Y")
         params = {
-            "data_inicio": data_ref.strftime("%d/%m/%Y"),
-            "data_fim": data_ref.strftime("%d/%m/%Y"),
+            "data_inicio": data_str,
+            "data_fim": data_str,
         }
+        log(f"GET zoop/financeiro ({data_str})")
         r = self.session.get(url, params=params, timeout=30)
+        log(f"GET resposta: status={r.status_code}")
         r.raise_for_status()
         return _parse_zoop_financeiro(r.text)
 
@@ -136,60 +145,150 @@ class MoomboxClient:
 # os seletores depois de inspecionar o HTML real das páginas.
 
 def _parse_relatorio_pagamento(html: str):
-    """Parse do HTML do relatório-tipo-pagamento."""
+    """
+    Parse do HTML do relatório-tipo-pagamento (Kartik GridView do Yii2).
+
+    Estratégia: usa `data-col-seq` pra mapear colunas e `data-raw-value` pros
+    valores canônicos (mais confiável que parsear texto pt-BR).
+
+    Mapeamento das colunas (data-col-seq):
+      0=#  1=Data  2=User Id  3=Cupom  4=Loja  5=Expositor  6=Expositor pagto
+      7=Meio pagto próprio  8=Pagamento  9=Cod Autoriza  10=Total cupom
+      11=Valor pago  12=Participação
+
+    A coluna 9 (Cod Autoriza) pode ter VÁRIOS pagamentos do mesmo cupom
+    concatenados no formato "COD - VALOR - DATA - tipo - parcelas". Por isso
+    cada linha pode gerar 1 ou mais itens de pagamento (mas mantemos 1 item
+    por linha aqui — o cruzamento usa cupom+valor+cod).
+    """
+    import re
     soup = BeautifulSoup(html, "html.parser")
     items = []
-    # PLACEHOLDER — ajustar seletores reais
-    # Procurar pela tabela principal
-    table = soup.find("table", class_="table") or soup.find("table")
+
+    # Encontra a tabela do GridView
+    table = soup.find("table", class_=lambda c: c and "kv-grid-table" in c)
+    if not table:
+        log("AVISO: tabela kv-grid-table não encontrada — tentando fallback")
+        table = soup.find("table")
     if not table:
         return items
 
-    for tr in table.find_all("tr")[1:]:  # pula header
-        tds = [td.get_text(strip=True) for td in tr.find_all("td")]
-        if len(tds) < 6:
+    tbody = table.find("tbody") or table
+
+    for tr in tbody.find_all("tr"):
+        # Ignora linhas vazias ou de mensagem "Nenhum resultado encontrado"
+        cells = {}
+        for td in tr.find_all("td"):
+            seq = td.get("data-col-seq")
+            if seq is None:
+                continue
+            raw = td.get("data-raw-value")
+            txt = td.get_text(strip=True)
+            cells[seq] = {"raw": raw, "text": txt}
+
+        if not cells or "3" not in cells:  # precisa pelo menos ter Cupom
             continue
+
         try:
+            cupom = cells["3"]["text"]
+            if not cupom or not cupom.isdigit():
+                continue
+
+            # Loja vem como "3 - Barra Shopping" — extrair id e nome
+            loja_txt = cells.get("4", {}).get("text", "")
+            m = re.match(r"^(\d+)\s*-\s*(.+)$", loja_txt)
+            if not m:
+                continue
+            loja_id = int(m.group(1))
+            loja_nome = m.group(2).strip()
+
+            # Valor pago: usar data-raw-value (canônico)
+            valor_raw = cells.get("11", {}).get("raw")
+            valor = float(valor_raw) if valor_raw else _parse_money(cells.get("11", {}).get("text", "0"))
+
+            # Cod Autoriza: pode ser "(não definido)" ou conter pagamentos concatenados
+            cod_txt = cells.get("9", {}).get("text", "").strip()
+            cod_aut = None
+            if cod_txt and "(não definido)" not in cod_txt and "não definido" not in cod_txt.lower():
+                # Pega o PRIMEIRO código (formato "COD - VALOR - ...")
+                m_cod = re.match(r"^\s*([A-Za-z0-9]+)", cod_txt)
+                if m_cod:
+                    cod_aut = m_cod.group(1)
+
+            # Data (canônica via data-raw-value: "2026-05-23")
+            data_raw = cells.get("1", {}).get("raw") or cells.get("1", {}).get("text", "")
+
+            # Pagamento (tipo: "3 - Debito", "4 - PIX máquina", etc)
+            pagamento = cells.get("8", {}).get("text", "")
+
             items.append({
-                "loja_id": _parse_loja(tds[0]),
-                "cupom": tds[1],
-                "hora": tds[2],
-                "cod_aut": tds[3].strip() or None,
-                "valor": _parse_money(tds[4]),
-                "forma_pagto": tds[5],
+                "loja_id": loja_id,
+                "loja_nome": loja_nome,
+                "cupom": cupom,
+                "hora": data_raw,  # só data por enquanto, o relatório não dá hora
+                "cod_aut": cod_aut,
+                "valor": valor,
+                "forma_pagto": pagamento,
             })
-        except (ValueError, IndexError):
+        except (ValueError, KeyError, AttributeError) as e:
+            log(f"Erro ao parsear linha: {e}")
             continue
+
+    log(f"Relatório-tipo-pagamento: {len(items)} itens parseados")
     return items
 
 
 def _parse_zoop_financeiro(html: str):
-    """Parse do HTML do zoop/financeiro."""
+    """
+    Parse do HTML do zoop/financeiro.
+
+    ATENÇÃO: esse parser ainda é placeholder — não temos a estrutura real
+    da tabela. Quando o cruzamento mostrar resultado incompleto, pedimos a
+    estrutura real via Claude for Chrome e ajustamos.
+    """
+    import re
     soup = BeautifulSoup(html, "html.parser")
     items = []
-    table = soup.find("table", class_="table") or soup.find("table")
+
+    table = soup.find("table", class_=lambda c: c and "kv-grid-table" in c)
     if not table:
+        table = soup.find("table", class_="table") or soup.find("table")
+    if not table:
+        log("AVISO: tabela do zoop não encontrada")
         return items
 
-    for tr in table.find_all("tr")[1:]:
-        tds = [td.get_text(strip=True) for td in tr.find_all("td")]
-        if len(tds) < 6:
-            continue
-        try:
-            status = tds[5].lower()
-            if "succeeded" not in status:  # filtra só sucesso
+    tbody = table.find("tbody") or table
+
+    for tr in tbody.find_all("tr"):
+        cells = {}
+        for td in tr.find_all("td"):
+            seq = td.get("data-col-seq")
+            if seq is None:
                 continue
-            items.append({
-                "loja_id": _parse_loja(tds[0]),
-                "zoop_id": tds[1],
-                "valor": _parse_money(tds[2]),
-                "bandeira": tds[3],
-                "tipo_pagamento": tds[4],
-                "hora": tds[6] if len(tds) > 6 else "",
-                "status": "succeeded",
-            })
-        except (ValueError, IndexError):
+            cells[seq] = {
+                "raw": td.get("data-raw-value"),
+                "text": td.get_text(strip=True),
+            }
+
+        if not cells:
             continue
+
+        # Heurística enquanto não temos o schema exato:
+        # procurar status "succeeded" em qualquer coluna
+        all_text = " ".join(c["text"] for c in cells.values()).lower()
+        if "succeeded" not in all_text:
+            continue
+
+        # Por enquanto vai retornar dados crus pra debug
+        items.append({
+            "_raw_cells": {k: v["text"] for k, v in cells.items()},
+            "loja_id": 0,  # placeholder
+            "zoop_id": "",
+            "valor": 0,
+            "status": "succeeded",
+        })
+
+    log(f"Zoop financeiro: {len(items)} itens parseados")
     return items
 
 
@@ -350,12 +449,15 @@ class handler(BaseHTTPRequestHandler):
                     "detail": "Defina LIVEPDV_USUARIO e LIVEPDV_SENHA nas env vars do Vercel",
                 })
 
+            # Tenta ler ?data=YYYY-MM-DD da URL; senão usa data operacional
+            data_ref = self._resolver_data()
+            log(f"Data de referência: {data_ref}")
+
             client = MoomboxClient()
             log("Tentando login no Moombox...")
             client.login()
             log("Login OK")
 
-            data_ref = date.today()
             log(f"Buscando relatório de pagamento para {data_ref}...")
             vendas = client.buscar_relatorio_pagamento(data_ref)
             log(f"Vendas LivePDV recebidas: {len(vendas)}")
@@ -370,6 +472,7 @@ class handler(BaseHTTPRequestHandler):
                 "vendas_livepdv": len(vendas),
                 "transacoes_zoop": len(zoop),
             }
+            resultado["data_referencia"] = data_ref.isoformat()
             log(f"Resultado: {len(resultado['problemas'])} problemas, {resultado['stats']['conciliado']} conciliados")
             return self._json(200, resultado)
 
@@ -382,6 +485,29 @@ class handler(BaseHTTPRequestHandler):
                 "type": type(e).__name__,
                 "traceback": tb,
             })
+
+    def _resolver_data(self):
+        """
+        Resolve a data de referência:
+        - Se a URL tiver ?data=YYYY-MM-DD, usa essa
+        - Senão, usa a "data operacional": antes das 6h, considera ontem
+        """
+        from urllib.parse import urlparse, parse_qs
+        from datetime import timedelta
+
+        parsed = urlparse(self.path)
+        qs = parse_qs(parsed.query)
+        if "data" in qs:
+            try:
+                return date.fromisoformat(qs["data"][0])
+            except (ValueError, IndexError):
+                pass
+
+        # Data operacional: antes das 6h → ontem
+        agora = datetime.now()
+        if agora.hour < 6:
+            return (agora - timedelta(days=1)).date()
+        return agora.date()
 
     def _json(self, status, payload):
         self.send_response(status)
