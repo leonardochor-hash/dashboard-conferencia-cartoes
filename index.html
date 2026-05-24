@@ -487,8 +487,23 @@ async function conferir() {
 
   try {
     const res = await fetch(API_ENDPOINT, { method: 'POST' });
-    if (!res.ok) throw new Error(`HTTP ${res.status}`);
-    dados = await res.json();
+    const data = await res.json().catch(() => null);
+    if (!res.ok) {
+      const detalhe = data ? `
+        <div style="text-align:left; max-width:700px; margin: 16px auto; padding: 12px; background: var(--surface-2); border-radius: 6px; font-family: var(--font-mono); font-size: 11px; white-space: pre-wrap; word-break: break-all; max-height: 300px; overflow:auto;">
+          <strong>Tipo:</strong> ${data.type || '?'}
+          <strong>Erro:</strong> ${data.error || '?'}
+          ${data.detail ? `\n<strong>Detalhe:</strong> ${data.detail}` : ''}
+          ${data.traceback ? `\n\n<strong>Traceback:</strong>\n${data.traceback}` : ''}
+        </div>` : '';
+      document.getElementById('lista').innerHTML = `
+        <div class="empty-state">
+          <div style="color: var(--danger); font-size: 16px; margin-bottom: 8px;">Erro HTTP ${res.status}</div>
+          ${detalhe}
+        </div>`;
+      return;
+    }
+    dados = data;
     updateStats();
     renderList();
     const ts = new Date().toLocaleTimeString('pt-BR', { hour: '2-digit', minute: '2-digit' });
@@ -498,9 +513,6 @@ async function conferir() {
       <div class="empty-state">
         <div style="color: var(--danger); font-size: 16px; margin-bottom: 8px;">Erro ao buscar dados</div>
         <div style="font-size: 13px;">${e.message}</div>
-        <div style="font-size: 12px; margin-top: 12px; color: var(--text-dim);">
-          Verifique se o endpoint /api/conferir está configurado no Vercel.
-        </div>
       </div>`;
   } finally {
     btn.disabled = false;
