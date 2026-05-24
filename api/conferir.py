@@ -17,11 +17,18 @@ Variáveis de ambiente esperadas (Vercel → Settings → Environment Variables)
 import os
 import json
 import hashlib
+import traceback
+import sys
 from datetime import datetime, date
 from http.server import BaseHTTPRequestHandler
 
 import requests
 from bs4 import BeautifulSoup
+
+
+def log(msg):
+    """Imprime no stderr — aparece nos logs do Vercel."""
+    print(f"[CONFERIR] {msg}", file=sys.stderr, flush=True)
 
 
 BASE_URL = os.environ.get("LIVEPDV_BASE_URL", "https://expositores.moombox.com.br")
@@ -309,6 +316,11 @@ class handler(BaseHTTPRequestHandler):
 
     def _handle(self):
         try:
+            log("=== Iniciando conferência ===")
+            log(f"USUARIO configurado: {'sim' if USUARIO else 'NÃO'}")
+            log(f"SENHA configurada: {'sim' if SENHA else 'NÃO'}")
+            log(f"BASE_URL: {BASE_URL}")
+
             if not USUARIO or not SENHA:
                 return self._json(500, {
                     "error": "Credenciais não configuradas",
@@ -316,20 +328,37 @@ class handler(BaseHTTPRequestHandler):
                 })
 
             client = MoomboxClient()
+            log("Tentando login no Moombox...")
             client.login()
+            log("Login OK")
 
             data_ref = date.today()
+            log(f"Buscando relatório de pagamento para {data_ref}...")
             vendas = client.buscar_relatorio_pagamento(data_ref)
+            log(f"Vendas LivePDV recebidas: {len(vendas)}")
+
+            log(f"Buscando financeiro Zoop para {data_ref}...")
             zoop = client.buscar_zoop_financeiro(data_ref)
+            log(f"Transações Zoop recebidas: {len(zoop)}")
+
+            log("Cruzando dados...")
             resultado = cruzar(vendas, zoop)
             resultado["totais"] = {
                 "vendas_livepdv": len(vendas),
                 "transacoes_zoop": len(zoop),
             }
+            log(f"Resultado: {len(resultado['problemas'])} problemas, {resultado['stats']['conciliado']} conciliados")
             return self._json(200, resultado)
 
         except Exception as e:
-            return self._json(500, {"error": str(e), "type": type(e).__name__})
+            tb = traceback.format_exc()
+            log(f"ERRO: {type(e).__name__}: {e}")
+            log(f"TRACEBACK:\n{tb}")
+            return self._json(500, {
+                "error": str(e),
+                "type": type(e).__name__,
+                "traceback": tb,
+            })
 
     def _json(self, status, payload):
         self.send_response(status)
@@ -337,3 +366,4 @@ class handler(BaseHTTPRequestHandler):
         self.send_header("Access-Control-Allow-Origin", "*")
         self.end_headers()
         self.wfile.write(json.dumps(payload, ensure_ascii=False).encode("utf-8"))
+
