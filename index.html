@@ -609,12 +609,12 @@ function renderItem(p) {
     body = `
       <div class="compare">
         <div>
-          <div class="label">LivePDV</div>
-          <div class="data">Cupom ${p.cupom} · cod aut: <strong>vazio</strong></div>
+          <div class="label">LivePDV · cupom ${p.cupom}</div>
+          <div class="data">${fmtMoney(p.valor)} · cod aut: <strong>vazio</strong></div>
         </div>
         <div>
-          <div class="label">Zoop (succeeded)</div>
-          <div class="data">ID: <strong>${p.zoop_id}</strong></div>
+          <div class="label">Zoop (succeeded) sugerido</div>
+          <div class="data">${fmtMoney(p.valor_zoop || p.valor)} · ID: <strong>${p.zoop_id}</strong></div>
         </div>
       </div>`;
     actions = isResolved
