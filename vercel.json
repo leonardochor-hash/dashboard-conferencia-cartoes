@@ -1,16 +1,22 @@
 {
-  "version": 2,
   "builds": [
-    { "src": "index.html", "use": "@vercel/static" },
-    { "src": "api/conferir.py", "use": "@vercel/python" }
+    {
+      "src": "index.html",
+      "use": "@vercel/static"
+    },
+    {
+      "src": "api/conferir.py",
+      "use": "@vercel/python"
+    }
   ],
   "routes": [
-    { "src": "/api/conferir", "dest": "/api/conferir.py" },
-    { "src": "/", "dest": "/index.html" }
-  ],
-  "functions": {
-    "api/conferir.py": {
-      "maxDuration": 60
+    {
+      "src": "/api/conferir",
+      "dest": "/api/conferir.py"
+    },
+    {
+      "src": "/",
+      "dest": "/index.html"
     }
-  }
+  ]
 }
