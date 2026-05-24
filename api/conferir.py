@@ -36,7 +36,7 @@ USUARIO = os.environ.get("LIVEPDV_USUARIO", "").strip()
 SENHA = os.environ.get("LIVEPDV_SENHA", "").strip()
 
 LOJAS_VALIDAS = [1, 3, 4]  # 1=RS, 3=BS, 4=NS
-TOLERANCIA_VALOR = 0.02  # tolerância de R$ 0,02 para evitar problema de arredondamento
+TOLERANCIA_VALOR = 2.00  # tolerância de R$ 2,00 — diferenças menores são consideradas OK
 
 
 # ==================== CLIENTE MOOMBOX ====================
