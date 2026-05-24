@@ -600,6 +600,7 @@ function renderList() {
 function renderItem(p) {
   const lojaNome = LOJA_NOMES[p.loja_id] || `Loja ${p.loja_id}`;
   const cupomText = p.cupom ? `Cupom <strong>#${p.cupom}</strong>` : '<em style="color: var(--text-dim)">sem cupom no LivePDV</em>';
+  const formaText = p.forma_pagto ? ` · ${p.forma_pagto}` : '';
   const isResolved = !!resolvidos.ids[p.id];
 
   let badge, title, body, actions;
@@ -676,7 +677,7 @@ function renderItem(p) {
         <div class="item-header-left">
           ${badge}
           <div class="item-meta">
-            ${lojaNome} · ${p.hora || '—'} · ${cupomText}
+            ${lojaNome} · ${p.hora || '—'} · ${cupomText}${formaText}
           </div>
         </div>
         ${valorDisplay}
