@@ -471,6 +471,42 @@ function marcarResolvido(id, action) {
   renderList();
   updateStats();
 }
+
+async function aprovarMatch(id, cupomId, codAutoriza, valorEsperado) {
+  if (!confirm(`Aprovar match: cupom ${cupomId} → cod ${codAutoriza.slice(0,16)}...?\n\nIsso vai SALVAR o código no LivePDV.`)) {
+    return;
+  }
+  // Indicador de carregamento no botão
+  const btn = event && event.target ? event.target : null;
+  if (btn) { btn.disabled = true; btn.textContent = 'Salvando...'; }
+
+  try {
+    const res = await fetch('/api/aprovar', {
+      method: 'POST',
+      headers: { 'Content-Type': 'application/json' },
+      body: JSON.stringify({
+        cupom_id: cupomId.replace(/^0+/, ''), // remove zeros à esquerda
+        cod_autoriza: codAutoriza,
+        valor_esperado: valorEsperado,
+      }),
+    });
+    const data = await res.json().catch(() => null);
+
+    if (!res.ok) {
+      const erro = data?.error || `HTTP ${res.status}`;
+      alert(`❌ Falhou: ${erro}\n\n${data?.traceback ? data.traceback.slice(0, 400) : ''}`);
+      if (btn) { btn.disabled = false; btn.textContent = '✓ Aprovar match'; }
+      return;
+    }
+
+    // Sucesso: marcar como aprovado localmente também
+    marcarResolvido(id, 'aprovado_livepdv');
+    alert(`✅ Match aprovado! Código salvo no LivePDV.\nCupom: ${cupomId}`);
+  } catch (e) {
+    alert(`❌ Erro de rede: ${e.message}`);
+    if (btn) { btn.disabled = false; btn.textContent = '✓ Aprovar match'; }
+  }
+}
 function reabrir(id) {
   delete resolvidos.ids[id];
   saveResolved();
@@ -621,7 +657,7 @@ function renderItem(p) {
     actions = isResolved
       ? `<button class="btn" onclick="reabrir('${p.id}')">Reabrir</button>`
       : `<button class="btn" onclick="marcarResolvido('${p.id}','ignorado')">Ignorar</button>
-         <button class="btn btn-success" onclick="marcarResolvido('${p.id}','aprovado')">✓ Aprovar match</button>`;
+         <button class="btn btn-success" onclick="aprovarMatch('${p.id}','${p.cupom}','${p.zoop_id}',${p.valor})">✓ Aprovar match</button>`;
   } else if (p.tipo === 'divergencia') {
     badge = '<span class="badge divergencia">Divergência de valor</span>';
     const delta = fmtMoney(Math.abs(p.valor_zoop - p.valor_livepdv));
