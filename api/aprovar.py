@@ -71,75 +71,92 @@ class MoomboxClient:
 
     def buscar_cupom(self, cupom_id):
         """
-        Carrega a página de visualização do cupom e extrai info dos pagamentos:
-        retorna lista de dicts: {editable_key, valor, cod_atual, tipo_pagamento}
-        e o csrf token mais recente (do <meta>).
+        Carrega a página de visualização do cupom e extrai info dos pagamentos.
+
+        Estratégia: cada pagamento tem um botão com id="pagamentos-N-cod_autoriza-targ".
+        O ID interno (editableKey) está em 2 lugares:
+        - <tr class="kv-grid-pagamentos" data-key="113039"> (pai da célula)
+        - <input type="hidden" name="editableKey" value="113039"> (dentro do popover form)
+        Vamos usar o <input> hidden — é mais robusto contra mudanças de estrutura.
         """
         url = f"{BASE_URL}/vendas/cupom/view"
         log(f"GET {url}?id={cupom_id}")
         r = self.session.get(url, params={"id": cupom_id}, timeout=15)
         r.raise_for_status()
 
-        # Pega csrf token do <meta> (usado nas chamadas AJAX)
         soup = BeautifulSoup(r.text, "html.parser")
+
+        # CSRF do <meta> pra usar nos headers AJAX
         meta_csrf = soup.find("meta", {"name": "csrf-token"})
         if meta_csrf:
             self._csrf_meta = meta_csrf.get("content", "")
             log(f"CSRF meta capturado: {self._csrf_meta[:20]}...")
 
-        # Encontra os pagamentos. O widget Kartik Editable cria spans tipo:
-        # id="pagamentos-0-cod_autoriza-targ", data-key="113039"
+        # Procura todos os botões "...cod_autoriza-targ"
         pagamentos = []
-        for span in soup.find_all(attrs={"id": re.compile(r"pagamentos-\d+-cod_autoriza-targ")}):
-            m = re.match(r"pagamentos-(\d+)-cod_autoriza-targ", span.get("id", ""))
+        for btn in soup.find_all(attrs={"id": re.compile(r"pagamentos-\d+-cod_autoriza-targ")}):
+            m = re.match(r"pagamentos-(\d+)-cod_autoriza-targ", btn.get("id", ""))
             if not m:
                 continue
             index = int(m.group(1))
-            key = span.get("data-key", "")
-            cod_atual = span.get_text(strip=True)
+            cod_atual = btn.get_text(strip=True)
+
+            # Subir até o popover associado, pegar form dele e o editableKey hidden
+            popover_id = f"pagamentos-{index}-cod_autoriza-popover"
+            popover = soup.find(id=popover_id)
+            editable_key = ""
+            csrf_form = ""
+            if popover:
+                key_input = popover.find("input", {"name": "editableKey"})
+                if key_input:
+                    editable_key = key_input.get("value", "").strip()
+                csrf_input = popover.find("input", {"name": "_csrf"})
+                if csrf_input:
+                    csrf_form = csrf_input.get("value", "").strip()
+
+            # Fallback: subir do botão até <tr> pai e pegar data-key
+            if not editable_key:
+                tr = btn.find_parent("tr")
+                if tr:
+                    editable_key = (tr.get("data-key") or "").strip()
+
+            # Tentar pegar o valor da linha (geralmente coluna data-col-seq="2" ou "3")
+            valor = None
+            tr = btn.find_parent("tr")
+            if tr:
+                for td in tr.find_all("td"):
+                    txt = td.get_text(strip=True)
+                    # Heurística: valor monetário com vírgula
+                    if re.match(r"^\d{1,3}(?:\.\d{3})*,\d{2,4}$|^\d+,\d{2,4}$|^\d+\.\d{2,4}$", txt):
+                        try:
+                            valor = float(txt.replace(".", "").replace(",", "."))
+                            break
+                        except ValueError:
+                            pass
+
             pagamentos.append({
                 "index": index,
-                "editable_key": key,
+                "editable_key": editable_key,
                 "cod_atual": cod_atual,
+                "valor": valor,
+                "csrf_form": csrf_form,
             })
 
-        # Tenta achar valores dos pagamentos pela tabela "Tipo Pagamentos"
-        # Estratégia: procura a tabela "Tipo Pagamentos" e mapeia por índice
-        valores = []
-        # Heurística: vamos pegar todos os <td> com valores monetários na ordem
-        # da tabela tipo-pagamentos. Como o HTML pode variar, fazemos best-effort.
-        for tbl in soup.find_all("table"):
-            # tabela tipo-pagamentos costuma ter "Cod Autoriza" no header
-            txt = tbl.get_text()
-            if "Cod Autoriza" in txt and "Tipo de pagamento" in txt:
-                for tr in tbl.find("tbody").find_all("tr") if tbl.find("tbody") else []:
-                    tds = [td.get_text(strip=True) for td in tr.find_all("td")]
-                    # td[2] geralmente é o Valor (depois de #, ID)
-                    for td_text in tds:
-                        if re.match(r"^\d+[,.]?\d*$", td_text.replace(",", ".").replace(".", "")):
-                            try:
-                                v = float(td_text.replace(".", "").replace(",", "."))
-                                valores.append(v)
-                                break
-                            except ValueError:
-                                pass
-                break
-
-        # Acopla valor a cada pagamento por índice (se conseguimos extrair)
-        for i, p in enumerate(pagamentos):
-            if i < len(valores):
-                p["valor"] = valores[i]
-
-        log(f"Cupom {cupom_id}: {len(pagamentos)} pagamentos encontrados")
+        log(f"Cupom {cupom_id}: {len(pagamentos)} pagamentos encontrados, keys={[p['editable_key'] for p in pagamentos]}")
         return pagamentos
 
     def atualizar_cod_autoriza(self, editable_key, editable_index, cod_autoriza):
         """
         Faz a chamada AJAX que o Kartik Editable faria pra salvar o cod_autoriza.
         """
-        url = f"{BASE_URL}/vendas/pagamentos/inline-update"
+        if not editable_key or not str(editable_key).strip():
+            raise RuntimeError(
+                f"editable_key vazio — não consegui descobrir o ID do pagamento no cupom"
+            )
         if not self._csrf_meta:
             raise RuntimeError("CSRF token do meta não capturado — chame buscar_cupom() antes")
+
+        url = f"{BASE_URL}/vendas/pagamentos/inline-update"
 
         payload = {
             "_csrf": self._csrf_meta,
@@ -162,7 +179,6 @@ class MoomboxClient:
         if r.status_code != 200:
             raise RuntimeError(f"POST inline-update falhou: status={r.status_code}, body={r.text[:300]}")
 
-        # Resposta esperada: {"output": "...", "message": ""}
         try:
             resp = r.json()
         except ValueError:
