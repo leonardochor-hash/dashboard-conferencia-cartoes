@@ -31,9 +31,9 @@ def log(msg):
     print(f"[CONFERIR] {msg}", file=sys.stderr, flush=True)
 
 
-BASE_URL = os.environ.get("LIVEPDV_BASE_URL", "https://expositores.moombox.com.br")
-USUARIO = os.environ.get("LIVEPDV_USUARIO", "")
-SENHA = os.environ.get("LIVEPDV_SENHA", "")
+BASE_URL = os.environ.get("LIVEPDV_BASE_URL", "https://expositores.moombox.com.br").rstrip("/")
+USUARIO = os.environ.get("LIVEPDV_USUARIO", "").strip()
+SENHA = os.environ.get("LIVEPDV_SENHA", "").strip()
 
 LOJAS_VALIDAS = [1, 3, 4]  # 1=RS, 3=BS, 4=NS
 TOLERANCIA_VALOR = 0.02  # tolerância de R$ 0,02 para evitar problema de arredondamento
@@ -53,30 +53,53 @@ class MoomboxClient:
     def login(self):
         """Faz login no LivePDV. Retorna True se ok."""
         login_url = f"{BASE_URL}/user/login"
+        log(f"GET {login_url}")
 
         # GET pra pegar CSRF token
         r = self.session.get(login_url, timeout=15)
+        log(f"GET resposta: status={r.status_code}, url_final={r.url}")
         r.raise_for_status()
+
         soup = BeautifulSoup(r.text, "html.parser")
         csrf_input = soup.find("input", {"name": "_csrf"})
         if not csrf_input:
-            raise RuntimeError("Não encontrei o campo _csrf na página de login")
-        csrf = csrf_input["value"]
+            # Mostra os primeiros 500 chars pra debug
+            preview = r.text[:500].replace("\n", " ")
+            raise RuntimeError(f"Campo _csrf não encontrado. Preview HTML: {preview}")
+        csrf = csrf_input.get("value", "")
+        log(f"CSRF token capturado: {csrf[:20]}...")
 
-        # POST com credenciais
+        # POST com credenciais — nomes reais do form
         payload = {
             "_csrf": csrf,
-            "LoginForm[username]": USUARIO,
-            "LoginForm[password]": SENHA,
-            "LoginForm[rememberMe]": "0",
-            "login-button": "",
+            "login-form[login]": USUARIO,
+            "login-form[password]": SENHA,
+            "login-form[rememberMe]": "0",
         }
+        log(f"POST {login_url} com usuario={USUARIO!r}")
         r = self.session.post(login_url, data=payload, timeout=15, allow_redirects=True)
-        r.raise_for_status()
+        log(f"POST resposta: status={r.status_code}, url_final={r.url}")
 
-        # Heurística: se ainda mostra "login" na URL ou no body, falhou
-        if "/user/login" in r.url or "Senha" in r.text and "incorreta" in r.text.lower():
-            raise RuntimeError("Login no Moombox falhou — confira usuário/senha")
+        # Coleta info pra diagnóstico
+        url_final = r.url
+        body_lower = r.text.lower()
+        tem_login_form = 'name="loginform' in body_lower or "loginform[username]" in body_lower
+        tem_logout = "logout" in body_lower or "sair" in body_lower
+        tem_erro_senha = "incorret" in body_lower or "inválid" in body_lower or "invalid" in body_lower
+        preview = r.text[:300].replace("\n", " ")
+
+        log(f"Análise: url_final={url_final}, tem_form_login={tem_login_form}, "
+            f"tem_logout={tem_logout}, tem_erro_senha={tem_erro_senha}")
+
+        # Se ainda mostra o formulário de login OU se URL ainda é /login, falhou
+        if "/user/login" in url_final or (tem_login_form and not tem_logout):
+            raise RuntimeError(
+                f"Login falhou. status={r.status_code}, url_final={url_final}, "
+                f"tem_form_login={tem_login_form}, tem_logout={tem_logout}, "
+                f"erro_senha_msg={tem_erro_senha}. Preview: {preview}"
+            )
+
+        log("LOGIN OK")
         return True
 
     def buscar_relatorio_pagamento(self, data_ref: date):
@@ -366,4 +389,3 @@ class handler(BaseHTTPRequestHandler):
         self.send_header("Access-Control-Allow-Origin", "*")
         self.end_headers()
         self.wfile.write(json.dumps(payload, ensure_ascii=False).encode("utf-8"))
-
