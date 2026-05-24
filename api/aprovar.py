@@ -1,730 +1,268 @@
-<!DOCTYPE html>
-<html lang="pt-BR">
-<head>
-<meta charset="UTF-8">
-<meta name="viewport" content="width=device-width, initial-scale=1.0">
-<title>Conferência de Cartões · LivePDV</title>
-<link rel="preconnect" href="https://fonts.googleapis.com">
-<link rel="preconnect" href="https://fonts.gstatic.com" crossorigin>
-<link href="https://fonts.googleapis.com/css2?family=Fraunces:opsz,wght@9..144,400;9..144,500;9..144,600&family=JetBrains+Mono:wght@400;500&family=Inter:wght@400;500;600&display=swap" rel="stylesheet">
-<style>
-:root {
-  --bg: #0f0f10;
-  --surface: #1a1a1c;
-  --surface-2: #232326;
-  --border: #2a2a2e;
-  --border-hover: #3a3a3f;
-  --text: #ededee;
-  --text-muted: #8a8a90;
-  --text-dim: #5a5a5f;
-  --accent: #d4a574;
-  --success: #4ade80;
-  --warning: #facc15;
-  --danger: #f87171;
-  --info: #60a5fa;
-  --font-serif: 'Fraunces', Georgia, serif;
-  --font-sans: 'Inter', -apple-system, sans-serif;
-  --font-mono: 'JetBrains Mono', monospace;
-}
-* { box-sizing: border-box; margin: 0; padding: 0; }
-body {
-  font-family: var(--font-sans);
-  background: var(--bg);
-  color: var(--text);
-  font-size: 14px;
-  line-height: 1.5;
-  min-height: 100vh;
+"""
+API Vercel — Aprovar match no LivePDV.
+
+Recebe via POST JSON:
+{
+  "cupom_id": "98682",          // ID do cupom (numérico, sem zeros à esquerda)
+  "cod_autoriza": "8358a36...",  // valor a salvar no LivePDV
+  "valor_esperado": 99.90        // só pra log/conferência
 }
 
-/* ===== LOGIN ===== */
-.login-screen {
-  min-height: 100vh;
-  display: flex;
-  align-items: center;
-  justify-content: center;
-  padding: 20px;
-}
-.login-box {
-  background: var(--surface);
-  border: 1px solid var(--border);
-  border-radius: 12px;
-  padding: 40px;
-  width: 100%;
-  max-width: 380px;
-}
-.login-box h1 {
-  font-family: var(--font-serif);
-  font-weight: 500;
-  font-size: 28px;
-  margin-bottom: 6px;
-  letter-spacing: -0.5px;
-}
-.login-box p { color: var(--text-muted); font-size: 13px; margin-bottom: 28px; }
-.login-box label {
-  display: block;
-  font-size: 12px;
-  color: var(--text-muted);
-  margin-bottom: 6px;
-  text-transform: uppercase;
-  letter-spacing: 0.5px;
-}
-.login-box input {
-  width: 100%;
-  padding: 10px 12px;
-  background: var(--bg);
-  border: 1px solid var(--border);
-  border-radius: 6px;
-  color: var(--text);
-  font-family: var(--font-sans);
-  font-size: 14px;
-  margin-bottom: 16px;
-  transition: border-color 0.15s;
-}
-.login-box input:focus { outline: none; border-color: var(--accent); }
-.login-box button {
-  width: 100%;
-  padding: 11px;
-  background: var(--accent);
-  color: #1a1a1c;
-  border: none;
-  border-radius: 6px;
-  font-family: var(--font-sans);
-  font-size: 14px;
-  font-weight: 600;
-  cursor: pointer;
-  transition: opacity 0.15s;
-}
-.login-box button:hover { opacity: 0.9; }
-.login-error {
-  color: var(--danger);
-  font-size: 13px;
-  margin-top: 10px;
-  display: none;
-}
+Faz:
+1. Login no Moombox
+2. GET na página do cupom pra extrair os editableKey de TODOS os pagamentos
+3. Identifica qual pagamento atualizar (o que está "(não definido)" e tem valor compatível)
+4. POST em /vendas/pagamentos/inline-update com o cod
+5. Retorna sucesso ou erro detalhado
+"""
 
-/* ===== DASHBOARD ===== */
-.app { display: none; }
-.app.active { display: block; }
+import os
+import json
+import re
+import sys
+import traceback
+from http.server import BaseHTTPRequestHandler
 
-header {
-  border-bottom: 1px solid var(--border);
-  padding: 20px 32px;
-  display: flex;
-  align-items: center;
-  justify-content: space-between;
-  flex-wrap: wrap;
-  gap: 16px;
-}
-header h1 {
-  font-family: var(--font-serif);
-  font-weight: 500;
-  font-size: 22px;
-  letter-spacing: -0.3px;
-}
-header .subtitle {
-  color: var(--text-muted);
-  font-size: 12px;
-  margin-top: 2px;
-}
-header .actions { display: flex; gap: 10px; align-items: center; }
+import requests
+from bs4 import BeautifulSoup
 
-select, .btn {
-  padding: 8px 14px;
-  background: var(--surface);
-  border: 1px solid var(--border);
-  border-radius: 6px;
-  color: var(--text);
-  font-family: var(--font-sans);
-  font-size: 13px;
-  cursor: pointer;
-  transition: all 0.15s;
-}
-select:hover, .btn:hover { border-color: var(--border-hover); background: var(--surface-2); }
-.btn-primary {
-  background: var(--accent);
-  color: #1a1a1c;
-  border-color: var(--accent);
-  font-weight: 600;
-}
-.btn-primary:hover { opacity: 0.9; background: var(--accent); }
-.btn-primary:disabled { opacity: 0.5; cursor: not-allowed; }
-.btn-success {
-  background: rgba(74, 222, 128, 0.1);
-  color: var(--success);
-  border-color: rgba(74, 222, 128, 0.3);
-}
-.btn-success:hover { background: rgba(74, 222, 128, 0.15); }
-.btn-icon-only { padding: 8px 10px; }
 
-main { padding: 24px 32px; max-width: 1200px; margin: 0 auto; }
+BASE_URL = os.environ.get("LIVEPDV_BASE_URL", "https://expositores.moombox.com.br").rstrip("/")
+USUARIO = os.environ.get("LIVEPDV_USUARIO", "").strip()
+SENHA = os.environ.get("LIVEPDV_SENHA", "").strip()
 
-/* ===== CARDS ===== */
-.stats {
-  display: grid;
-  grid-template-columns: repeat(auto-fit, minmax(160px, 1fr));
-  gap: 12px;
-  margin-bottom: 28px;
-}
-.stat-card {
-  background: var(--surface);
-  border: 1px solid var(--border);
-  border-radius: 10px;
-  padding: 16px 18px;
-}
-.stat-card .label {
-  font-size: 11px;
-  color: var(--text-muted);
-  text-transform: uppercase;
-  letter-spacing: 0.6px;
-  margin-bottom: 6px;
-}
-.stat-card .value {
-  font-family: var(--font-serif);
-  font-size: 28px;
-  font-weight: 500;
-}
-.stat-card.success .value { color: var(--success); }
-.stat-card.warning .value { color: var(--warning); }
-.stat-card.danger .value { color: var(--danger); }
 
-/* ===== TABS ===== */
-.tabs {
-  display: flex;
-  gap: 4px;
-  border-bottom: 1px solid var(--border);
-  margin-bottom: 20px;
-}
-.tab {
-  padding: 10px 16px;
-  font-size: 13px;
-  color: var(--text-muted);
-  cursor: pointer;
-  border-bottom: 2px solid transparent;
-  margin-bottom: -1px;
-  transition: all 0.15s;
-}
-.tab:hover { color: var(--text); }
-.tab.active {
-  color: var(--text);
-  border-bottom-color: var(--accent);
-  font-weight: 500;
-}
+def log(msg):
+    print(f"[APROVAR] {msg}", file=sys.stderr, flush=True)
 
-/* ===== ITEMS ===== */
-.empty-state {
-  text-align: center;
-  padding: 60px 20px;
-  color: var(--text-muted);
-}
-.empty-state .big-check {
-  font-family: var(--font-serif);
-  font-size: 48px;
-  color: var(--success);
-  margin-bottom: 12px;
-}
 
-.item {
-  background: var(--surface);
-  border: 1px solid var(--border);
-  border-left: 3px solid var(--border);
-  border-radius: 8px;
-  padding: 14px 18px;
-  margin-bottom: 10px;
-  transition: border-color 0.15s;
-}
-.item:hover { border-color: var(--border-hover); }
-.item.match { border-left-color: var(--warning); }
-.item.divergencia { border-left-color: var(--danger); }
-.item.orfao { border-left-color: var(--danger); }
-.item.fantasma { border-left-color: var(--info); }
+class MoomboxClient:
+    """Cliente que loga no Moombox."""
 
-.item-header {
-  display: flex;
-  justify-content: space-between;
-  align-items: flex-start;
-  margin-bottom: 12px;
-  flex-wrap: wrap;
-  gap: 8px;
-}
-.item-header-left { display: flex; flex-direction: column; gap: 4px; }
-.item-meta {
-  font-size: 12px;
-  color: var(--text-muted);
-  display: flex;
-  gap: 8px;
-  align-items: center;
-  flex-wrap: wrap;
-}
-.item-meta strong { color: var(--text); font-family: var(--font-mono); }
+    def __init__(self):
+        self.session = requests.Session()
+        self.session.headers.update({
+            "User-Agent": "Mozilla/5.0 (X11; Linux x86_64) DashConferencia/1.0"
+        })
+        self._csrf_meta = None  # csrf token do <meta>, usado em ajax
 
-.badge {
-  display: inline-block;
-  font-size: 10px;
-  font-weight: 600;
-  padding: 3px 8px;
-  border-radius: 4px;
-  text-transform: uppercase;
-  letter-spacing: 0.6px;
-  width: fit-content;
-}
-.badge.match { background: rgba(250, 204, 21, 0.15); color: var(--warning); }
-.badge.divergencia, .badge.orfao { background: rgba(248, 113, 113, 0.15); color: var(--danger); }
-.badge.fantasma { background: rgba(96, 165, 250, 0.15); color: var(--info); }
+    def login(self):
+        login_url = f"{BASE_URL}/user/login"
+        r = self.session.get(login_url, timeout=15)
+        r.raise_for_status()
+        soup = BeautifulSoup(r.text, "html.parser")
+        csrf_input = soup.find("input", {"name": "_csrf"})
+        if not csrf_input:
+            raise RuntimeError("Campo _csrf não encontrado na página de login")
+        csrf = csrf_input.get("value", "")
 
-.item-value {
-  font-family: var(--font-mono);
-  font-size: 14px;
-  font-weight: 500;
-}
-.item-value.danger { color: var(--danger); }
+        payload = {
+            "_csrf": csrf,
+            "login-form[login]": USUARIO,
+            "login-form[password]": SENHA,
+            "login-form[rememberMe]": "0",
+        }
+        r = self.session.post(login_url, data=payload, timeout=15, allow_redirects=True)
+        r.raise_for_status()
 
-.compare {
-  display: grid;
-  grid-template-columns: 1fr 1fr;
-  gap: 10px;
-  margin-bottom: 12px;
-}
-.compare > div {
-  background: var(--surface-2);
-  border-radius: 6px;
-  padding: 8px 12px;
-}
-.compare .label {
-  font-size: 10px;
-  color: var(--text-muted);
-  text-transform: uppercase;
-  letter-spacing: 0.5px;
-  margin-bottom: 4px;
-}
-.compare .data {
-  font-family: var(--font-mono);
-  font-size: 12px;
-  word-break: break-all;
-}
-.compare .data strong { color: var(--accent); }
+        if "/user/login" in r.url:
+            raise RuntimeError("Login no Moombox falhou")
+        return True
 
-.item-actions {
-  display: flex;
-  gap: 8px;
-  justify-content: flex-end;
-}
-.item-actions .btn { font-size: 12px; padding: 6px 12px; }
+    def buscar_cupom(self, cupom_id):
+        """
+        Carrega a página de visualização do cupom e extrai info dos pagamentos:
+        retorna lista de dicts: {editable_key, valor, cod_atual, tipo_pagamento}
+        e o csrf token mais recente (do <meta>).
+        """
+        url = f"{BASE_URL}/vendas/cupom/view"
+        log(f"GET {url}?id={cupom_id}")
+        r = self.session.get(url, params={"id": cupom_id}, timeout=15)
+        r.raise_for_status()
 
-.loading {
-  display: none;
-  text-align: center;
-  padding: 40px;
-  color: var(--text-muted);
-}
-.loading.active { display: block; }
-.spinner {
-  display: inline-block;
-  width: 20px;
-  height: 20px;
-  border: 2px solid var(--border);
-  border-top-color: var(--accent);
-  border-radius: 50%;
-  animation: spin 0.8s linear infinite;
-  margin-right: 8px;
-  vertical-align: middle;
-}
-@keyframes spin { to { transform: rotate(360deg); } }
+        # Pega csrf token do <meta> (usado nas chamadas AJAX)
+        soup = BeautifulSoup(r.text, "html.parser")
+        meta_csrf = soup.find("meta", {"name": "csrf-token"})
+        if meta_csrf:
+            self._csrf_meta = meta_csrf.get("content", "")
+            log(f"CSRF meta capturado: {self._csrf_meta[:20]}...")
 
-@media (max-width: 640px) {
-  header, main { padding: 16px 18px; }
-  .compare { grid-template-columns: 1fr; }
-  .item-actions { flex-wrap: wrap; }
-}
-</style>
-</head>
-<body>
+        # Encontra os pagamentos. O widget Kartik Editable cria spans tipo:
+        # id="pagamentos-0-cod_autoriza-targ", data-key="113039"
+        pagamentos = []
+        for span in soup.find_all(attrs={"id": re.compile(r"pagamentos-\d+-cod_autoriza-targ")}):
+            m = re.match(r"pagamentos-(\d+)-cod_autoriza-targ", span.get("id", ""))
+            if not m:
+                continue
+            index = int(m.group(1))
+            key = span.get("data-key", "")
+            cod_atual = span.get_text(strip=True)
+            pagamentos.append({
+                "index": index,
+                "editable_key": key,
+                "cod_atual": cod_atual,
+            })
 
-<!-- ===== LOGIN ===== -->
-<div class="login-screen" id="login-screen">
-  <div class="login-box">
-    <h1>Conferência de cartões</h1>
-    <p>LivePDV ↔ Zoop</p>
-    <label>Senha de acesso</label>
-    <input type="password" id="login-password" autofocus onkeydown="if(event.key==='Enter')doLogin()">
-    <button onclick="doLogin()">Entrar</button>
-    <div class="login-error" id="login-error">Senha incorreta.</div>
-  </div>
-</div>
+        # Tenta achar valores dos pagamentos pela tabela "Tipo Pagamentos"
+        # Estratégia: procura a tabela "Tipo Pagamentos" e mapeia por índice
+        valores = []
+        # Heurística: vamos pegar todos os <td> com valores monetários na ordem
+        # da tabela tipo-pagamentos. Como o HTML pode variar, fazemos best-effort.
+        for tbl in soup.find_all("table"):
+            # tabela tipo-pagamentos costuma ter "Cod Autoriza" no header
+            txt = tbl.get_text()
+            if "Cod Autoriza" in txt and "Tipo de pagamento" in txt:
+                for tr in tbl.find("tbody").find_all("tr") if tbl.find("tbody") else []:
+                    tds = [td.get_text(strip=True) for td in tr.find_all("td")]
+                    # td[2] geralmente é o Valor (depois de #, ID)
+                    for td_text in tds:
+                        if re.match(r"^\d+[,.]?\d*$", td_text.replace(",", ".").replace(".", "")):
+                            try:
+                                v = float(td_text.replace(".", "").replace(",", "."))
+                                valores.append(v)
+                                break
+                            except ValueError:
+                                pass
+                break
 
-<!-- ===== APP ===== -->
-<div class="app" id="app">
-  <header>
-    <div>
-      <h1>Conferência de cartões</h1>
-      <div class="subtitle" id="header-subtitle">Hoje · LivePDV ↔ Zoop</div>
-    </div>
-    <div class="actions">
-      <select id="loja-filter" onchange="renderList()">
-        <option value="all">Todas as lojas</option>
-        <option value="1">RSul (RS)</option>
-        <option value="3">Barrabox (BS)</option>
-        <option value="4">NovaPS (NS)</option>
-      </select>
-      <input type="date" id="data-filter" style="padding: 8px 10px; background: var(--surface); border: 1px solid var(--border); border-radius: 6px; color: var(--text); font-family: var(--font-sans); font-size: 13px;">
-      <button class="btn btn-primary" id="btn-conferir" onclick="conferir()">
-        ↻ Conferir agora
-      </button>
-      <button class="btn btn-icon-only" onclick="logout()" title="Sair">⎋</button>
-    </div>
-  </header>
+        # Acopla valor a cada pagamento por índice (se conseguimos extrair)
+        for i, p in enumerate(pagamentos):
+            if i < len(valores):
+                p["valor"] = valores[i]
 
-  <main>
-    <!-- Stats -->
-    <div class="stats">
-      <div class="stat-card success">
-        <div class="label">Conciliado</div>
-        <div class="value" id="stat-ok">—</div>
-      </div>
-      <div class="stat-card warning">
-        <div class="label">Sugestões</div>
-        <div class="value" id="stat-match">—</div>
-      </div>
-      <div class="stat-card danger">
-        <div class="label">Divergências</div>
-        <div class="value" id="stat-diverg">—</div>
-      </div>
-      <div class="stat-card danger">
-        <div class="label">Órfãos / Fantasmas</div>
-        <div class="value" id="stat-orfao">—</div>
-      </div>
-    </div>
+        log(f"Cupom {cupom_id}: {len(pagamentos)} pagamentos encontrados")
+        return pagamentos
 
-    <!-- Tabs -->
-    <div class="tabs">
-      <div class="tab active" data-tab="pendentes" onclick="switchTab('pendentes')">
-        Pendentes <span id="count-pendentes">(0)</span>
-      </div>
-      <div class="tab" data-tab="resolvidos" onclick="switchTab('resolvidos')">
-        Resolvidos <span id="count-resolvidos">(0)</span>
-      </div>
-    </div>
+    def atualizar_cod_autoriza(self, editable_key, editable_index, cod_autoriza):
+        """
+        Faz a chamada AJAX que o Kartik Editable faria pra salvar o cod_autoriza.
+        """
+        url = f"{BASE_URL}/vendas/pagamentos/inline-update"
+        if not self._csrf_meta:
+            raise RuntimeError("CSRF token do meta não capturado — chame buscar_cupom() antes")
 
-    <!-- Loading -->
-    <div class="loading" id="loading">
-      <span class="spinner"></span> Buscando dados do Moombox...
-    </div>
+        payload = {
+            "_csrf": self._csrf_meta,
+            "hasEditable": "1",
+            "editableIndex": str(editable_index),
+            "editableKey": str(editable_key),
+            "editableAttribute": "cod_autoriza",
+            f"Pagamentos[{editable_index}][cod_autoriza]": cod_autoriza,
+        }
+        headers = {
+            "X-CSRF-Token": self._csrf_meta,
+            "X-Requested-With": "XMLHttpRequest",
+            "Accept": "application/json, text/javascript, */*; q=0.01",
+        }
 
-    <!-- Lista -->
-    <div id="lista"></div>
-  </main>
-</div>
+        log(f"POST {url} editableKey={editable_key} cod={cod_autoriza[:20]}...")
+        r = self.session.post(url, data=payload, headers=headers, timeout=15)
+        log(f"POST resposta: status={r.status_code}, body[:200]={r.text[:200]}")
 
-<script>
-// ============= CONFIG =============
-const DASHBOARD_PASSWORD = 'cartoes2026'; // mude isso depois
-const STORAGE_KEY = 'conf_cartoes_auth';
-const RESOLVED_KEY = 'conf_cartoes_resolved';
-const API_ENDPOINT = '/api/conferir';
+        if r.status_code != 200:
+            raise RuntimeError(f"POST inline-update falhou: status={r.status_code}, body={r.text[:300]}")
 
-const LOJA_NOMES = { 1: 'RSul', 3: 'Barrabox', 4: 'NovaPS' };
+        # Resposta esperada: {"output": "...", "message": ""}
+        try:
+            resp = r.json()
+        except ValueError:
+            raise RuntimeError(f"Resposta não é JSON: {r.text[:300]}")
 
-// ============= STATE =============
-let dados = { problemas: [], stats: {} };
-let resolvidos = loadResolved();
-let currentTab = 'pendentes';
+        if resp.get("message"):
+            raise RuntimeError(f"LivePDV rejeitou: {resp['message']}")
 
-// ============= LOGIN =============
-function checkAuth() {
-  if (sessionStorage.getItem(STORAGE_KEY) === 'ok') {
-    showApp();
-  }
-}
-function doLogin() {
-  const pwd = document.getElementById('login-password').value;
-  if (pwd === DASHBOARD_PASSWORD) {
-    sessionStorage.setItem(STORAGE_KEY, 'ok');
-    showApp();
-  } else {
-    document.getElementById('login-error').style.display = 'block';
-  }
-}
-function logout() {
-  sessionStorage.removeItem(STORAGE_KEY);
-  location.reload();
-}
-function showApp() {
-  document.getElementById('login-screen').style.display = 'none';
-  document.getElementById('app').classList.add('active');
-  conferir();
-}
+        return resp
 
-// ============= STORAGE (resolvidos) =============
-function loadResolved() {
-  try {
-    const today = new Date().toISOString().slice(0, 10);
-    const stored = JSON.parse(localStorage.getItem(RESOLVED_KEY) || '{}');
-    if (stored.date !== today) return { date: today, ids: {} };
-    return stored;
-  } catch { return { date: new Date().toISOString().slice(0, 10), ids: {} }; }
-}
-function saveResolved() {
-  localStorage.setItem(RESOLVED_KEY, JSON.stringify(resolvidos));
-}
-function marcarResolvido(id, action) {
-  resolvidos.ids[id] = { action, at: new Date().toISOString() };
-  saveResolved();
-  renderList();
-  updateStats();
-}
 
-async function aprovarMatch(id, cupomId, codAutoriza, valorEsperado) {
-  if (!confirm(`Aprovar match: cupom ${cupomId} → cod ${codAutoriza.slice(0,16)}...?\n\nIsso vai SALVAR o código no LivePDV.`)) {
-    return;
-  }
-  // Indicador de carregamento no botão
-  const btn = event && event.target ? event.target : null;
-  if (btn) { btn.disabled = true; btn.textContent = 'Salvando...'; }
+class handler(BaseHTTPRequestHandler):
+    def do_POST(self):
+        try:
+            content_length = int(self.headers.get("Content-Length", 0))
+            body = self.rfile.read(content_length).decode("utf-8") if content_length else "{}"
+            data = json.loads(body)
 
-  try {
-    const res = await fetch('/api/aprovar', {
-      method: 'POST',
-      headers: { 'Content-Type': 'application/json' },
-      body: JSON.stringify({
-        cupom_id: cupomId.replace(/^0+/, ''), // remove zeros à esquerda
-        cod_autoriza: codAutoriza,
-        valor_esperado: valorEsperado,
-      }),
-    });
-    const data = await res.json().catch(() => null);
+            cupom_id = data.get("cupom_id")
+            cod_autoriza = data.get("cod_autoriza")
+            valor_esperado = data.get("valor_esperado")
 
-    if (!res.ok) {
-      const erro = data?.error || `HTTP ${res.status}`;
-      alert(`❌ Falhou: ${erro}\n\n${data?.traceback ? data.traceback.slice(0, 400) : ''}`);
-      if (btn) { btn.disabled = false; btn.textContent = '✓ Aprovar match'; }
-      return;
-    }
+            if not cupom_id or not cod_autoriza:
+                return self._json(400, {"error": "cupom_id e cod_autoriza são obrigatórios"})
 
-    // Sucesso: marcar como aprovado localmente também
-    marcarResolvido(id, 'aprovado_livepdv');
-    alert(`✅ Match aprovado! Código salvo no LivePDV.\nCupom: ${cupomId}`);
-  } catch (e) {
-    alert(`❌ Erro de rede: ${e.message}`);
-    if (btn) { btn.disabled = false; btn.textContent = '✓ Aprovar match'; }
-  }
-}
-function reabrir(id) {
-  delete resolvidos.ids[id];
-  saveResolved();
-  renderList();
-  updateStats();
-}
+            log(f"=== Aprovando cupom={cupom_id} cod={cod_autoriza[:20]}... valor={valor_esperado} ===")
 
-// ============= API =============
-async function conferir() {
-  const btn = document.getElementById('btn-conferir');
-  const loading = document.getElementById('loading');
-  btn.disabled = true;
-  loading.classList.add('active');
-  document.getElementById('lista').innerHTML = '';
+            if not USUARIO or not SENHA:
+                return self._json(500, {"error": "Credenciais não configuradas"})
 
-  // Constrói URL com data se selecionada
-  const dataInput = document.getElementById('data-filter');
-  const dataParam = dataInput && dataInput.value ? `?data=${dataInput.value}` : '';
-  const url = API_ENDPOINT + dataParam;
+            client = MoomboxClient()
+            client.login()
 
-  try {
-    const res = await fetch(url, { method: 'POST' });
-    const data = await res.json().catch(() => null);
-    if (!res.ok) {
-      const detalhe = data ? `
-        <div style="text-align:left; max-width:700px; margin: 16px auto; padding: 12px; background: var(--surface-2); border-radius: 6px; font-family: var(--font-mono); font-size: 11px; white-space: pre-wrap; word-break: break-all; max-height: 300px; overflow:auto;">
-          <strong>Tipo:</strong> ${data.type || '?'}
-          <strong>Erro:</strong> ${data.error || '?'}
-          ${data.detail ? `\n<strong>Detalhe:</strong> ${data.detail}` : ''}
-          ${data.traceback ? `\n\n<strong>Traceback:</strong>\n${data.traceback}` : ''}
-        </div>` : '';
-      document.getElementById('lista').innerHTML = `
-        <div class="empty-state">
-          <div style="color: var(--danger); font-size: 16px; margin-bottom: 8px;">Erro HTTP ${res.status}</div>
-          ${detalhe}
-        </div>`;
-      return;
-    }
-    dados = data;
-    updateStats();
-    renderList();
-    const ts = new Date().toLocaleTimeString('pt-BR', { hour: '2-digit', minute: '2-digit' });
-    const dataRef = data.data_referencia ? new Date(data.data_referencia + 'T12:00:00').toLocaleDateString('pt-BR') : 'hoje';
-    const totais = data.totais || {};
-    document.getElementById('header-subtitle').textContent =
-      `${dataRef} · ${totais.vendas_livepdv || 0} vendas PDV · ${totais.transacoes_zoop || 0} Zoop · conferido ${ts}`;
-  } catch (e) {
-    document.getElementById('lista').innerHTML = `
-      <div class="empty-state">
-        <div style="color: var(--danger); font-size: 16px; margin-bottom: 8px;">Erro ao buscar dados</div>
-        <div style="font-size: 13px;">${e.message}</div>
-      </div>`;
-  } finally {
-    btn.disabled = false;
-    loading.classList.remove('active');
-  }
-}
+            # 1) Buscar pagamentos do cupom
+            pagamentos = client.buscar_cupom(cupom_id)
+            if not pagamentos:
+                return self._json(404, {
+                    "error": f"Nenhum pagamento encontrado pro cupom {cupom_id}",
+                })
 
-// ============= RENDER =============
-function updateStats() {
-  const s = dados.stats || {};
-  document.getElementById('stat-ok').textContent = s.conciliado || 0;
-  document.getElementById('stat-match').textContent = countByType('match');
-  document.getElementById('stat-diverg').textContent = countByType('divergencia');
-  document.getElementById('stat-orfao').textContent = countByType('orfao') + countByType('fantasma');
+            # 2) Identificar qual pagamento atualizar
+            # Critério: cod_atual igual a "(não definido)" ou vazio
+            candidatos = [
+                p for p in pagamentos
+                if not p.get("cod_atual")
+                or "não definido" in p.get("cod_atual", "").lower()
+                or p.get("cod_atual", "").strip() == ""
+            ]
 
-  const filtered = filterByLoja(dados.problemas || []);
-  const pendentes = filtered.filter(p => !resolvidos.ids[p.id]).length;
-  const resolvedos = filtered.filter(p => resolvidos.ids[p.id]).length;
-  document.getElementById('count-pendentes').textContent = `(${pendentes})`;
-  document.getElementById('count-resolvidos').textContent = `(${resolvedos})`;
-}
+            if not candidatos:
+                return self._json(409, {
+                    "error": "Todos os pagamentos do cupom já têm código de autorização",
+                    "pagamentos": pagamentos,
+                })
 
-function countByType(type) {
-  const filtered = filterByLoja(dados.problemas || []);
-  return filtered.filter(p => p.tipo === type && !resolvidos.ids[p.id]).length;
-}
+            # Se tem mais de um sem cod, usa o valor pra desambiguar
+            if len(candidatos) > 1 and valor_esperado is not None:
+                candidatos_valor = [
+                    p for p in candidatos
+                    if abs(p.get("valor", 0) - valor_esperado) < 0.02
+                ]
+                if candidatos_valor:
+                    candidatos = candidatos_valor
 
-function filterByLoja(items) {
-  const loja = document.getElementById('loja-filter').value;
-  if (loja === 'all') return items;
-  return items.filter(p => String(p.loja_id) === loja);
-}
+            if len(candidatos) > 1:
+                return self._json(409, {
+                    "error": f"Múltiplos pagamentos sem cod_autoriza no cupom (e ambíguos por valor). Atualize manualmente.",
+                    "candidatos": candidatos,
+                })
 
-function switchTab(tab) {
-  currentTab = tab;
-  document.querySelectorAll('.tab').forEach(t => {
-    t.classList.toggle('active', t.dataset.tab === tab);
-  });
-  renderList();
-}
+            alvo = candidatos[0]
+            log(f"Pagamento alvo: index={alvo['index']} key={alvo['editable_key']} valor={alvo.get('valor')}")
 
-function fmtMoney(v) {
-  return Number(v).toLocaleString('pt-BR', { style: 'currency', currency: 'BRL' });
-}
+            # 3) Atualizar
+            resp = client.atualizar_cod_autoriza(
+                editable_key=alvo["editable_key"],
+                editable_index=alvo["index"],
+                cod_autoriza=cod_autoriza,
+            )
 
-function renderList() {
-  updateStats();
-  const lista = document.getElementById('lista');
-  const filtered = filterByLoja(dados.problemas || []);
-  const items = currentTab === 'pendentes'
-    ? filtered.filter(p => !resolvidos.ids[p.id])
-    : filtered.filter(p => resolvidos.ids[p.id]);
+            return self._json(200, {
+                "ok": True,
+                "cupom_id": cupom_id,
+                "cod_autoriza": cod_autoriza,
+                "editable_key": alvo["editable_key"],
+                "livepdv_response": resp,
+            })
 
-  if (items.length === 0) {
-    if (currentTab === 'pendentes' && (dados.problemas || []).length > 0) {
-      lista.innerHTML = `
-        <div class="empty-state">
-          <div class="big-check">✓</div>
-          <div>Nenhum problema pendente nesta loja.</div>
-        </div>`;
-    } else if (currentTab === 'pendentes') {
-      lista.innerHTML = `
-        <div class="empty-state">
-          <div>Clique em "Conferir agora" para buscar os dados do dia.</div>
-        </div>`;
-    } else {
-      lista.innerHTML = `
-        <div class="empty-state"><div>Nenhum item resolvido ainda.</div></div>`;
-    }
-    return;
-  }
+        except Exception as e:
+            tb = traceback.format_exc()
+            log(f"ERRO: {type(e).__name__}: {e}\n{tb}")
+            return self._json(500, {
+                "error": str(e),
+                "type": type(e).__name__,
+                "traceback": tb,
+            })
 
-  lista.innerHTML = items.map(renderItem).join('');
-}
-
-function renderItem(p) {
-  const lojaNome = LOJA_NOMES[p.loja_id] || `Loja ${p.loja_id}`;
-  const cupomText = p.cupom ? `Cupom <strong>#${p.cupom}</strong>` : '<em style="color: var(--text-dim)">sem cupom no LivePDV</em>';
-  const formaText = p.forma_pagto ? ` · ${p.forma_pagto}` : '';
-  const isResolved = !!resolvidos.ids[p.id];
-
-  let badge, title, body, actions;
-
-  if (p.tipo === 'match') {
-    badge = '<span class="badge match">Sugestão de match</span>';
-    body = `
-      <div class="compare">
-        <div>
-          <div class="label">LivePDV · cupom ${p.cupom}</div>
-          <div class="data">${fmtMoney(p.valor)} · cod aut: <strong>vazio</strong></div>
-        </div>
-        <div>
-          <div class="label">Zoop (succeeded) sugerido</div>
-          <div class="data">${fmtMoney(p.valor_zoop || p.valor)} · ID: <strong>${p.zoop_id}</strong></div>
-        </div>
-      </div>`;
-    actions = isResolved
-      ? `<button class="btn" onclick="reabrir('${p.id}')">Reabrir</button>`
-      : `<button class="btn" onclick="marcarResolvido('${p.id}','ignorado')">Ignorar</button>
-         <button class="btn btn-success" onclick="aprovarMatch('${p.id}','${p.cupom}','${p.zoop_id}',${p.valor})">✓ Aprovar match</button>`;
-  } else if (p.tipo === 'divergencia') {
-    badge = '<span class="badge divergencia">Divergência de valor</span>';
-    const delta = fmtMoney(Math.abs(p.valor_zoop - p.valor_livepdv));
-    body = `
-      <div class="compare">
-        <div>
-          <div class="label">LivePDV · cupom ${p.cupom}</div>
-          <div class="data">${fmtMoney(p.valor_livepdv)} · ${p.zoop_id}</div>
-        </div>
-        <div>
-          <div class="label">Zoop</div>
-          <div class="data">${fmtMoney(p.valor_zoop)} · ${p.zoop_id}</div>
-        </div>
-      </div>`;
-    actions = isResolved
-      ? `<button class="btn" onclick="reabrir('${p.id}')">Reabrir</button>`
-      : `<button class="btn" onclick="marcarResolvido('${p.id}','investigando')">Investigar</button>
-         <button class="btn btn-success" onclick="marcarResolvido('${p.id}','resolvido')">Marcar resolvido</button>`;
-  } else if (p.tipo === 'orfao') {
-    badge = '<span class="badge orfao">Cartão órfão</span>';
-    body = `
-      <div class="compare" style="grid-template-columns: 1fr;">
-        <div>
-          <div class="label">Zoop (succeeded) sem venda no LivePDV</div>
-          <div class="data">${p.zoop_id} · ${p.bandeira || ''} ${p.tipo_pagamento || ''}</div>
-        </div>
-      </div>`;
-    actions = isResolved
-      ? `<button class="btn" onclick="reabrir('${p.id}')">Reabrir</button>`
-      : `<button class="btn" onclick="marcarResolvido('${p.id}','buscando')">Buscar no LivePDV</button>
-         <button class="btn btn-success" onclick="marcarResolvido('${p.id}','resolvido')">Marcar resolvido</button>`;
-  } else {
-    badge = '<span class="badge fantasma">Venda fantasma</span>';
-    body = `
-      <div class="compare" style="grid-template-columns: 1fr;">
-        <div>
-          <div class="label">LivePDV sem transação Zoop</div>
-          <div class="data">Cupom ${p.cupom} · cod aut: ${p.cod_aut || 'vazio'}</div>
-        </div>
-      </div>`;
-    actions = isResolved
-      ? `<button class="btn" onclick="reabrir('${p.id}')">Reabrir</button>`
-      : `<button class="btn btn-success" onclick="marcarResolvido('${p.id}','resolvido')">Marcar resolvido</button>`;
-  }
-
-  const valorDisplay = p.tipo === 'divergencia'
-    ? `<span class="item-value danger">Δ ${fmtMoney(Math.abs(p.valor_zoop - p.valor_livepdv))}</span>`
-    : `<span class="item-value">${fmtMoney(p.valor || p.valor_zoop || p.valor_livepdv || 0)}</span>`;
-
-  return `
-    <div class="item ${p.tipo}">
-      <div class="item-header">
-        <div class="item-header-left">
-          ${badge}
-          <div class="item-meta">
-            ${lojaNome} · ${p.hora || '—'} · ${cupomText}${formaText}
-          </div>
-        </div>
-        ${valorDisplay}
-      </div>
-      ${body}
-      <div class="item-actions">${actions}</div>
-    </div>`;
-}
-
-// ============= INIT =============
-checkAuth();
-</script>
-</body>
-</html>
+    def _json(self, status, payload):
+        self.send_response(status)
+        self.send_header("Content-Type", "application/json; charset=utf-8")
+        self.send_header("Access-Control-Allow-Origin", "*")
+        self.end_headers()
+        self.wfile.write(json.dumps(payload, ensure_ascii=False).encode("utf-8"))
