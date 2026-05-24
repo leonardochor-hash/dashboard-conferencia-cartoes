@@ -144,6 +144,29 @@ class MoomboxClient:
 # ATENÇÃO: Estes parsers são placeholders. Você precisa ajustar
 # os seletores depois de inspecionar o HTML real das páginas.
 
+def _eh_forma_pagto_cartao(forma_pagto: str) -> bool:
+    """
+    Retorna True se a forma de pagamento passa pelo Zoop.
+    Apenas Crédito, Débito e PIX máquina devem ser conferidos.
+
+    Formato típico do LivePDV: "3 - Debito", "4 - PIX máquina",
+    "2 - Credito 2X", "2 - Credito à Vista", etc.
+    """
+    if not forma_pagto:
+        return False
+    f = forma_pagto.lower()
+    # PIX máquina (PIX da maquininha) - diferenciar de PIX manual
+    if "pix" in f and ("máquina" in f or "maquina" in f):
+        return True
+    if "credito" in f or "crédito" in f or "credit" in f:
+        return True
+    if "debito" in f or "débito" in f or "debit" in f:
+        return True
+    # Excluir explicitamente os que não passam pelo Zoop
+    # (troca, desconto, dinheiro, cancelamento, conta corrente, voucher etc)
+    return False
+
+
 def _parse_relatorio_pagamento(html: str):
     """
     Parse do HTML do relatório-tipo-pagamento (Kartik GridView do Yii2).
@@ -228,11 +251,19 @@ def _parse_relatorio_pagamento(html: str):
             # Pagamento (tipo: "3 - Debito", "4 - PIX máquina", etc)
             pagamento = cells.get("8", {}).get("text", "")
 
+            # FILTRO 1: só formas que passam pelo Zoop
+            if not _eh_forma_pagto_cartao(pagamento):
+                continue
+
+            # FILTRO 2: ignora valores negativos (estornos / cancelamentos)
+            if valor < 0:
+                continue
+
             items.append({
                 "loja_id": loja_id,
                 "loja_nome": loja_nome,
                 "cupom": cupom,
-                "hora": data_raw,  # só data por enquanto, o relatório não dá hora
+                "hora": data_raw,
                 "cod_aut": cod_aut,
                 "valor": valor,
                 "forma_pagto": pagamento,
@@ -369,13 +400,11 @@ def _make_id(*parts) -> str:
 
 def cruzar(vendas_livepdv, transacoes_zoop):
     """
-    Cruza vendas LivePDV com transações Zoop.
+    Cruza pagamentos LivePDV com transações Zoop.
 
-    REGRA: cada transação Zoop é UM pagamento. No LivePDV, o mesmo pagamento
-    pode aparecer em VÁRIAS linhas (uma por expositor/marca do cupom), porque
-    o sistema rateia o valor entre os produtos vendidos. Por isso precisamos
-    AGRUPAR as linhas do LivePDV por (cupom, cod_aut) e SOMAR os valores
-    antes de cruzar com o Zoop.
+    REGRA: cada LINHA do relatório-tipo-pagamento (após filtro de forma de
+    pagamento) é UM pagamento individual. Cada transação Zoop também é UM
+    pagamento. Então o cruzamento é 1:1 por (loja, cod_aut).
 
     Tipos de problema retornados:
     - "match"        : pagamento PDV sem cod_aut, mas existe Zoop compatível
@@ -383,20 +412,7 @@ def cruzar(vendas_livepdv, transacoes_zoop):
     - "fantasma"     : pagamento PDV com cod_aut mas Zoop não tem
     - "orfao"        : Zoop succeeded sem pagamento PDV correspondente
     """
-    from collections import defaultdict
-
-    # 1) Agrupar LivePDV por (loja, cupom, cod_aut) e somar valores
-    grupos_pdv = defaultdict(lambda: {"valor": 0.0, "linhas": 0, "hora": "", "loja_nome": ""})
-    for v in vendas_livepdv:
-        key = (v["loja_id"], v["cupom"], v.get("cod_aut") or "")
-        g = grupos_pdv[key]
-        g["valor"] += v["valor"]
-        g["linhas"] += 1
-        g["hora"] = v.get("hora", g["hora"])
-        g["loja_nome"] = v.get("loja_nome", g["loja_nome"])
-        g["forma_pagto"] = v.get("forma_pagto", g.get("forma_pagto"))
-
-    # 2) Indexar Zoop por (loja, zoop_id)
+    # Indexar Zoop por (loja, zoop_id)
     zoop_index = {}
     for z in transacoes_zoop:
         zoop_index[(z["loja_id"], z["zoop_id"])] = z
@@ -405,9 +421,12 @@ def cruzar(vendas_livepdv, transacoes_zoop):
     problemas = []
     conciliado = 0
 
-    # 3) Para cada grupo do LivePDV, tentar match
-    for (loja, cupom, cod_aut), grupo in grupos_pdv.items():
-        valor = round(grupo["valor"], 2)
+    # Para cada PAGAMENTO do LivePDV, tentar match
+    for v in vendas_livepdv:
+        loja = v["loja_id"]
+        cupom = v["cupom"]
+        cod_aut = v.get("cod_aut") or ""
+        valor = round(v["valor"], 2)
 
         # Sem cod_aut → tentar sugerir match por valor+loja
         if not cod_aut:
@@ -424,21 +443,25 @@ def cruzar(vendas_livepdv, transacoes_zoop):
                     "tipo": "match",
                     "loja_id": loja,
                     "cupom": cupom,
-                    "hora": grupo["hora"],
+                    "hora": v.get("hora", ""),
                     "valor": valor,
                     "valor_zoop": z["valor"],
                     "zoop_id": z["zoop_id"],
+                    "forma_pagto": v.get("forma_pagto", ""),
                 })
                 zoop_usados.add((z["loja_id"], z["zoop_id"]))
             else:
+                # 0 ou >1 candidatos → venda fantasma (precisa investigar)
                 problemas.append({
-                    "id": _make_id("fantasma", loja, cupom, "no_cod"),
+                    "id": _make_id("fantasma", loja, cupom, "no_cod", v.get("forma_pagto", "")),
                     "tipo": "fantasma",
                     "loja_id": loja,
                     "cupom": cupom,
-                    "hora": grupo["hora"],
+                    "hora": v.get("hora", ""),
                     "valor": valor,
                     "cod_aut": None,
+                    "forma_pagto": v.get("forma_pagto", ""),
+                    "candidatos_zoop": len(candidatos),
                 })
             continue
 
@@ -450,9 +473,10 @@ def cruzar(vendas_livepdv, transacoes_zoop):
                 "tipo": "fantasma",
                 "loja_id": loja,
                 "cupom": cupom,
-                "hora": grupo["hora"],
+                "hora": v.get("hora", ""),
                 "valor": valor,
                 "cod_aut": cod_aut,
+                "forma_pagto": v.get("forma_pagto", ""),
             })
         elif abs(z["valor"] - valor) >= TOLERANCIA_VALOR:
             problemas.append({
@@ -460,10 +484,11 @@ def cruzar(vendas_livepdv, transacoes_zoop):
                 "tipo": "divergencia",
                 "loja_id": loja,
                 "cupom": cupom,
-                "hora": grupo["hora"],
+                "hora": v.get("hora", ""),
                 "zoop_id": cod_aut,
                 "valor_livepdv": valor,
                 "valor_zoop": z["valor"],
+                "forma_pagto": v.get("forma_pagto", ""),
             })
             zoop_usados.add((loja, cod_aut))
         else:
@@ -471,7 +496,7 @@ def cruzar(vendas_livepdv, transacoes_zoop):
             conciliado += 1
             zoop_usados.add((loja, cod_aut))
 
-    # 4) Transações Zoop que sobraram sem match → órfãos
+    # Transações Zoop que sobraram sem match → órfãos
     for z in transacoes_zoop:
         key = (z["loja_id"], z["zoop_id"])
         if key in zoop_usados:
