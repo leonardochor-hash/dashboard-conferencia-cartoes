@@ -127,11 +127,11 @@ class MoomboxClient:
         """
         Baixa o financeiro Zoop do dia (só status=succeeded).
         """
-        url = f"{BASE_URL}/zoop/financeiro"
+        url = f"{BASE_URL}/zoop/financeiro/index"
         data_str = data_ref.strftime("%d/%m/%Y")
         params = {
-            "data_inicio": data_str,
-            "data_fim": data_str,
+            "TransacaoPosSearch[data]": f"{data_str} - {data_str}",
+            "_tog1149016d": "all",  # "Ver todos"
         }
         log(f"GET zoop/financeiro ({data_str})")
         r = self.session.get(url, params=params, timeout=30)
@@ -240,11 +240,18 @@ def _parse_relatorio_pagamento(html: str):
 
 def _parse_zoop_financeiro(html: str):
     """
-    Parse do HTML do zoop/financeiro.
+    Parse do HTML do zoop/financeiro (Kartik GridView do Yii2).
 
-    ATENÇÃO: esse parser ainda é placeholder — não temos a estrutura real
-    da tabela. Quando o cruzamento mostrar resultado incompleto, pedimos a
-    estrutura real via Claude for Chrome e ajustamos.
+    Estrutura descoberta:
+      data-col-seq="1"  → Loja (id numérico, com rowspan! forward-fill)
+      data-col-seq="2"  → Cod Autorização (6 dígitos, da bandeira)
+      data-col-seq="3"  → Data + hora
+      data-col-seq="4"  → Valor Crédito
+      data-col-seq="5"  → Valor da Operação (valor pago pelo cliente)
+      data-col-seq="6"  → Tipo Pagamento (credit/debit/pix)
+      data-col-seq="9"  → Bandeira
+      data-col-seq="13" → ID Transação (hash 32 chars) — CHAVE PRA CRUZAR
+      data-col-seq="14" → Status (succeeded/failed/canceled)
     """
     import re
     soup = BeautifulSoup(html, "html.parser")
@@ -252,43 +259,79 @@ def _parse_zoop_financeiro(html: str):
 
     table = soup.find("table", class_=lambda c: c and "kv-grid-table" in c)
     if not table:
-        table = soup.find("table", class_="table") or soup.find("table")
-    if not table:
-        log("AVISO: tabela do zoop não encontrada")
+        log("AVISO: tabela kv-grid-table não encontrada no Zoop")
         return items
 
     tbody = table.find("tbody") or table
+    loja_atual = None  # forward-fill da loja (vem com rowspan)
+
+    total_linhas = 0
+    pulou_total = 0
+    pulou_nao_succeeded = 0
 
     for tr in tbody.find_all("tr"):
+        # Pular linhas de totalizadores de grupo (têm class kv-group-footer)
+        tr_class = " ".join(tr.get("class") or [])
+        if "kv-group" in tr_class and "kv-group-footer" in tr_class:
+            pulou_total += 1
+            continue
+
         cells = {}
         for td in tr.find_all("td"):
             seq = td.get("data-col-seq")
             if seq is None:
                 continue
-            cells[seq] = {
-                "raw": td.get("data-raw-value"),
-                "text": td.get_text(strip=True),
-            }
+            cells[seq] = td.get_text(strip=True)
 
         if not cells:
             continue
 
-        # Heurística enquanto não temos o schema exato:
-        # procurar status "succeeded" em qualquer coluna
-        all_text = " ".join(c["text"] for c in cells.values()).lower()
-        if "succeeded" not in all_text:
+        # Atualiza loja se a linha trouxer (primeira do grupo)
+        if "1" in cells and cells["1"].strip().isdigit():
+            loja_atual = int(cells["1"].strip())
+
+        # Linha precisa ter ID transação (col 13)
+        zoop_id = cells.get("13", "").strip()
+        if not zoop_id or len(zoop_id) < 20:
             continue
 
-        # Por enquanto vai retornar dados crus pra debug
-        items.append({
-            "_raw_cells": {k: v["text"] for k, v in cells.items()},
-            "loja_id": 0,  # placeholder
-            "zoop_id": "",
-            "valor": 0,
-            "status": "succeeded",
-        })
+        # Filtra só succeeded
+        status = cells.get("14", "").strip().lower()
+        if status != "succeeded":
+            pulou_nao_succeeded += 1
+            continue
 
-    log(f"Zoop financeiro: {len(items)} itens parseados")
+        if loja_atual is None:
+            log(f"AVISO: transação Zoop sem loja determinada: {zoop_id}")
+            continue
+
+        try:
+            # Valor da Operação (col 5) = o que o cliente pagou
+            valor_str = cells.get("5", "0").replace(",", ".")
+            valor = float(valor_str) if valor_str else 0.0
+
+            # Data + hora: "23/05/2026 21:06:03"
+            data_txt = cells.get("3", "")
+            hora = ""
+            if " " in data_txt:
+                hora = data_txt.split(" ", 1)[1]  # só hora
+
+            items.append({
+                "loja_id": loja_atual,
+                "zoop_id": zoop_id,
+                "cod_autorizacao": cells.get("2", ""),  # 6 dígitos
+                "valor": valor,
+                "tipo_pagamento": cells.get("6", ""),
+                "bandeira": cells.get("9", ""),
+                "hora": hora,
+                "status": status,
+            })
+            total_linhas += 1
+        except (ValueError, KeyError) as e:
+            log(f"Erro parseando linha Zoop: {e}")
+            continue
+
+    log(f"Zoop: {total_linhas} transações succeeded, {pulou_total} totais ignorados, {pulou_nao_succeeded} não-succeeded ignoradas")
     return items
 
 
@@ -355,6 +398,7 @@ def cruzar(vendas_livepdv, transacoes_zoop):
                     "cupom": v["cupom"],
                     "hora": v["hora"],
                     "valor": valor,
+                    "valor_zoop": z["valor"],
                     "zoop_id": z["zoop_id"],
                 })
                 zoop_usados.add((z["loja_id"], z["zoop_id"]))
