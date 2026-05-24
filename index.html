@@ -365,6 +365,7 @@ main { padding: 24px 32px; max-width: 1200px; margin: 0 auto; }
         <option value="3">Barrabox (BS)</option>
         <option value="4">NovaPS (NS)</option>
       </select>
+      <input type="date" id="data-filter" style="padding: 8px 10px; background: var(--surface); border: 1px solid var(--border); border-radius: 6px; color: var(--text); font-family: var(--font-sans); font-size: 13px;">
       <button class="btn btn-primary" id="btn-conferir" onclick="conferir()">
         ↻ Conferir agora
       </button>
@@ -485,8 +486,13 @@ async function conferir() {
   loading.classList.add('active');
   document.getElementById('lista').innerHTML = '';
 
+  // Constrói URL com data se selecionada
+  const dataInput = document.getElementById('data-filter');
+  const dataParam = dataInput && dataInput.value ? `?data=${dataInput.value}` : '';
+  const url = API_ENDPOINT + dataParam;
+
   try {
-    const res = await fetch(API_ENDPOINT, { method: 'POST' });
+    const res = await fetch(url, { method: 'POST' });
     const data = await res.json().catch(() => null);
     if (!res.ok) {
       const detalhe = data ? `
@@ -507,7 +513,10 @@ async function conferir() {
     updateStats();
     renderList();
     const ts = new Date().toLocaleTimeString('pt-BR', { hour: '2-digit', minute: '2-digit' });
-    document.getElementById('header-subtitle').textContent = `Hoje · Última conferência: ${ts}`;
+    const dataRef = data.data_referencia ? new Date(data.data_referencia + 'T12:00:00').toLocaleDateString('pt-BR') : 'hoje';
+    const totais = data.totais || {};
+    document.getElementById('header-subtitle').textContent =
+      `${dataRef} · ${totais.vendas_livepdv || 0} vendas PDV · ${totais.transacoes_zoop || 0} Zoop · conferido ${ts}`;
   } catch (e) {
     document.getElementById('lista').innerHTML = `
       <div class="empty-state">
