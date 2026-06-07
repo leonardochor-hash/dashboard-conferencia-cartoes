@@ -398,28 +398,53 @@ def _make_id(*parts) -> str:
     return hashlib.md5(raw.encode()).hexdigest()[:12]
 
 
+def _candidatos_zoop(transacoes_zoop, zoop_usados, loja, valor):
+    """Retorna transações Zoop da mesma loja, ainda não usadas, com valor
+    dentro da tolerância. Ordenadas pela menor diferença de valor (melhor
+    candidato primeiro) para escolha determinística."""
+    cands = [
+        z for z in transacoes_zoop
+        if z["loja_id"] == loja
+        and (z["loja_id"], z["zoop_id"]) not in zoop_usados
+        and abs(z["valor"] - valor) < TOLERANCIA_VALOR
+    ]
+    cands.sort(key=lambda z: abs(z["valor"] - valor))
+    return cands
+
+
 def cruzar(vendas_livepdv, transacoes_zoop):
     """
     Cruza pagamentos LivePDV (já filtrados: só cartão/PIX máquina, sem
-    negativos) com transações Zoop.
+    negativos) com transações Zoop, em vários passes para identificar a
+    correção mais provável de cada erro de lançamento.
 
-    REGRA: agrupa LivePDV por (loja, cod_aut) e soma os valores. Um cupom
-    pode aparecer em várias linhas (uma por marca/expositor) com o MESMO
-    cod_aut, porque o sistema rateia o pagamento entre as marcas. Pra
-    conferir contra o Zoop precisamos da SOMA das parcelas.
+    REGRA DE AGRUPAMENTO: agrupa LivePDV por (loja, cod_aut) e soma os
+    valores. Um cupom pode aparecer em várias linhas (uma por marca/
+    expositor) com o MESMO cod_aut, porque o sistema rateia o pagamento
+    entre as marcas. Pra conferir contra o Zoop precisamos da SOMA das
+    parcelas. Para pagamentos SEM cod_aut, agrupa por (loja, cupom).
 
-    Para pagamentos SEM cod_aut, agrupa por (loja, cupom).
+    PASSES:
+      1. Grupos COM cod_aut → match exato por (loja, cod_aut):
+         - bate valor  → conciliado (não vai pro dashboard)
+         - valor difere → "divergencia"
+         - não acha Zoop → fica pendente pro passe 3
+      2. Grupos SEM cod_aut, agrupados por (loja, valor):
+         - casa 1 a 1 com Zoop disponível → "match" (sugere preencher cod)
+         - sobra PDV com Zoop já consumido no mesmo valor → "duplicado"
+         - sobra PDV sem nenhum Zoop → "fantasma"
+      3. Grupos COM cod_aut que não acharam Zoop, cruzados por (loja, valor)
+         com os Zoop órfãos restantes:
+         - acha Zoop compatível → "cod_errado" (sugere TROCAR o cod)
+         - não acha → "fantasma"
+      4. Zoop restante sem PDV → "orfao"
 
-    Tipos de problema retornados:
-    - "match"        : pagamento PDV sem cod_aut, mas existe Zoop compatível
-    - "divergencia"  : cod_aut bate mas valor diverge
-    - "fantasma"     : pagamento PDV com cod_aut mas Zoop não tem
-    - "orfao"        : Zoop succeeded sem pagamento PDV correspondente
+    Cada sugestão carrega "confianca": "alta" quando há 1 único candidato,
+    "media" quando há ambiguidade (mais de um candidato no mesmo valor).
     """
     from collections import defaultdict
 
-    # 1) Agrupar LivePDV por (loja, cod_aut) — somando valores.
-    #    Para pagamentos sem cod_aut, agrupar por (loja, cupom).
+    # 1) Agrupar LivePDV
     com_cod = defaultdict(lambda: {"valor": 0.0, "cupons": set(), "hora": "", "forma_pagto": ""})
     sem_cod = defaultdict(lambda: {"valor": 0.0, "hora": "", "forma_pagto": ""})
 
@@ -427,7 +452,6 @@ def cruzar(vendas_livepdv, transacoes_zoop):
         loja = v["loja_id"]
         cod_aut = v.get("cod_aut") or ""
         valor = v["valor"]
-
         if cod_aut:
             g = com_cod[(loja, cod_aut)]
             g["valor"] += valor
@@ -435,94 +459,150 @@ def cruzar(vendas_livepdv, transacoes_zoop):
             g["hora"] = v.get("hora", g["hora"])
             g["forma_pagto"] = v.get("forma_pagto", g["forma_pagto"])
         else:
-            # Sem cod_aut: chave por cupom (cupom-teste por exemplo)
             g = sem_cod[(loja, v["cupom"])]
             g["valor"] += valor
             g["hora"] = v.get("hora", g["hora"])
             g["forma_pagto"] = v.get("forma_pagto", g["forma_pagto"])
 
-    # 2) Indexar Zoop por (loja, zoop_id)
-    zoop_index = {}
-    for z in transacoes_zoop:
-        zoop_index[(z["loja_id"], z["zoop_id"])] = z
+    zoop_index = {(z["loja_id"], z["zoop_id"]): z for z in transacoes_zoop}
     zoop_usados = set()
-
     problemas = []
     conciliado = 0
 
-    # 3) Grupos COM cod_aut: cruzar exato com Zoop
+    # ---- PASSE 1: grupos COM cod_aut, match exato por (loja, cod_aut) ----
+    fantasmas_com_cod = []  # leftover pro passe 3
     for (loja, cod_aut), g in com_cod.items():
         valor = round(g["valor"], 2)
-        # Pegar um cupom de exemplo pra mostrar (geralmente é só 1)
         cupom_str = "/".join(sorted(g["cupons"])) if g["cupons"] else None
-
         z = zoop_index.get((loja, cod_aut))
-        if z is None:
-            problemas.append({
-                "id": _make_id("fantasma", loja, cod_aut),
-                "tipo": "fantasma",
-                "loja_id": loja,
-                "cupom": cupom_str,
-                "hora": g["hora"],
-                "valor": valor,
-                "cod_aut": cod_aut,
-                "forma_pagto": g["forma_pagto"],
-            })
-        elif abs(z["valor"] - valor) >= TOLERANCIA_VALOR:
-            problemas.append({
-                "id": _make_id("diverg", loja, cod_aut),
-                "tipo": "divergencia",
-                "loja_id": loja,
-                "cupom": cupom_str,
-                "hora": g["hora"],
-                "zoop_id": cod_aut,
-                "valor_livepdv": valor,
-                "valor_zoop": z["valor"],
-                "forma_pagto": g["forma_pagto"],
-            })
-            zoop_usados.add((loja, cod_aut))
-        else:
-            # MATCH PERFEITO — não vai pro dashboard
+        if z is not None and abs(z["valor"] - valor) < TOLERANCIA_VALOR:
+            # cod bate E valor bate -> conciliado
             conciliado += 1
             zoop_usados.add((loja, cod_aut))
+        else:
+            # cod aponta pra NADA (z is None) OU pra transacao de valor ERRADO
+            # (ex: cupom R$599 com a referencia de um cartao de outro valor).
+            # Guarda pro passe 3 procurar a transacao Zoop do MESMO valor do
+            # cupom e sugerir TROCAR a referencia. NAO consumimos z aqui: se ele
+            # existe mas e de outro valor, deixamos livre pro cupom certo dele.
+            fantasmas_com_cod.append({
+                "loja": loja, "cod": cod_aut, "valor": valor,
+                "cupom": cupom_str, "hora": g["hora"], "forma_pagto": g["forma_pagto"],
+                "z_valor_errado": (z["valor"] if z is not None else None),
+            })
 
-    # 4) Grupos SEM cod_aut: tentar sugerir match por valor+loja
+    # ---- PASSE 2: grupos SEM cod_aut, em buckets por (loja, valor) ----
+    # Permite detectar duplicados: 2+ cupons de mesmo valor com 1 só Zoop.
+    buckets = defaultdict(list)
     for (loja, cupom), g in sem_cod.items():
-        valor = round(g["valor"], 2)
-        candidatos = [
-            z for z in transacoes_zoop
-            if z["loja_id"] == loja
-            and (z["loja_id"], z["zoop_id"]) not in zoop_usados
-            and abs(z["valor"] - valor) < TOLERANCIA_VALOR
-        ]
-        if len(candidatos) == 1:
-            z = candidatos[0]
+        buckets[(loja, round(g["valor"], 2))].append({
+            "cupom": cupom, "valor": round(g["valor"], 2),
+            "hora": g["hora"], "forma_pagto": g["forma_pagto"], "loja": loja,
+        })
+
+    for (loja, valor), grupo in buckets.items():
+        # quantos Zoop existem nesse valor/loja (antes de consumir)
+        disponiveis_no_inicio = len(_candidatos_zoop(transacoes_zoop, zoop_usados, loja, valor))
+        casados = 0
+        for f in sorted(grupo, key=lambda x: x["cupom"]):
+            cands = _candidatos_zoop(transacoes_zoop, zoop_usados, loja, valor)
+            if cands:
+                z = cands[0]
+                ambiguo = len(cands) > 1 or len(grupo) > 1
+                problemas.append({
+                    "id": _make_id("match", loja, f["cupom"], z["zoop_id"]),
+                    "tipo": "match",
+                    "loja_id": loja,
+                    "cupom": f["cupom"],
+                    "hora": f["hora"],
+                    "valor": valor,
+                    "valor_zoop": z["valor"],
+                    "zoop_id": z["zoop_id"],
+                    "cod_autorizacao": z.get("cod_autorizacao"),
+                    "forma_pagto": f["forma_pagto"],
+                    "confianca": "media" if ambiguo else "alta",
+                    "outros_candidatos": max(0, len(cands) - 1),
+                })
+                zoop_usados.add((z["loja_id"], z["zoop_id"]))
+                casados += 1
+            else:
+                # Sem Zoop disponível neste valor.
+                if disponiveis_no_inicio >= 1 and len(grupo) > 1:
+                    # Já houve Zoop nesse valor e há mais de um cupom igual →
+                    # forte indício de cupom lançado em duplicidade.
+                    problemas.append({
+                        "id": _make_id("dup", loja, f["cupom"], valor),
+                        "tipo": "duplicado",
+                        "loja_id": loja,
+                        "cupom": f["cupom"],
+                        "hora": f["hora"],
+                        "valor": valor,
+                        "forma_pagto": f["forma_pagto"],
+                        "grupo_tamanho": len(grupo),
+                        "zoop_no_valor": disponiveis_no_inicio,
+                    })
+                else:
+                    problemas.append({
+                        "id": _make_id("fantasma", loja, f["cupom"], "no_cod"),
+                        "tipo": "fantasma",
+                        "loja_id": loja,
+                        "cupom": f["cupom"],
+                        "hora": f["hora"],
+                        "valor": valor,
+                        "cod_aut": None,
+                        "forma_pagto": f["forma_pagto"],
+                        "candidatos_zoop": 0,
+                    })
+
+    # ---- PASSE 3: cod_aut que não achou Zoop × Zoop órfão por (loja, valor) ----
+    for f in fantasmas_com_cod:
+        loja, valor = f["loja"], f["valor"]
+        cands = _candidatos_zoop(transacoes_zoop, zoop_usados, loja, valor)
+        if cands:
+            z = cands[0]
             problemas.append({
-                "id": _make_id("match", loja, cupom, z["zoop_id"]),
-                "tipo": "match",
+                "id": _make_id("coderr", loja, f["cupom"], z["zoop_id"]),
+                "tipo": "cod_errado",
                 "loja_id": loja,
-                "cupom": cupom,
-                "hora": g["hora"],
+                "cupom": f["cupom"],
+                "hora": f["hora"],
                 "valor": valor,
                 "valor_zoop": z["valor"],
-                "zoop_id": z["zoop_id"],
-                "forma_pagto": g["forma_pagto"],
+                "cod_errado": f["cod"],         # o que está (errado) no LivePDV
+                "cod_certo": z["zoop_id"],       # o ID Zoop que deveria estar
+                "cod_autorizacao": z.get("cod_autorizacao"),
+                "forma_pagto": f["forma_pagto"],
+                "confianca": "media" if len(cands) > 1 else "alta",
+                "outros_candidatos": max(0, len(cands) - 1),
             })
             zoop_usados.add((z["loja_id"], z["zoop_id"]))
+        elif f.get("z_valor_errado") is not None:
+            # Nao achei transacao Zoop do valor do cupom, mas a referencia atual
+            # aponta pra uma transacao de OUTRO valor -> divergencia (investigar).
+            problemas.append({
+                "id": _make_id("diverg", loja, f["cod"]),
+                "tipo": "divergencia",
+                "loja_id": loja,
+                "cupom": f["cupom"],
+                "hora": f["hora"],
+                "zoop_id": f["cod"],
+                "valor_livepdv": valor,
+                "valor_zoop": f["z_valor_errado"],
+                "forma_pagto": f["forma_pagto"],
+            })
         else:
             problemas.append({
-                "id": _make_id("fantasma", loja, cupom, "no_cod"),
+                "id": _make_id("fantasma", loja, f["cod"]),
                 "tipo": "fantasma",
                 "loja_id": loja,
-                "cupom": cupom,
-                "hora": g["hora"],
+                "cupom": f["cupom"],
+                "hora": f["hora"],
                 "valor": valor,
-                "cod_aut": None,
-                "forma_pagto": g["forma_pagto"],
-                "candidatos_zoop": len(candidatos),
+                "cod_aut": f["cod"],
+                "forma_pagto": f["forma_pagto"],
             })
 
-    # 5) Transações Zoop que sobraram sem match → órfãos
+    # ---- PASSE 4: Zoop restante sem PDV -> orfaos ----
     for z in transacoes_zoop:
         key = (z["loja_id"], z["zoop_id"])
         if key in zoop_usados:
@@ -535,6 +615,7 @@ def cruzar(vendas_livepdv, transacoes_zoop):
             "hora": z.get("hora", ""),
             "valor": z["valor"],
             "zoop_id": z["zoop_id"],
+            "cod_autorizacao": z.get("cod_autorizacao"),
             "bandeira": z.get("bandeira"),
             "tipo_pagamento": z.get("tipo_pagamento"),
         })
@@ -557,33 +638,32 @@ class handler(BaseHTTPRequestHandler):
 
     def _handle(self):
         try:
-            log("=== Iniciando conferência ===")
-            log(f"USUARIO configurado: {'sim' if USUARIO else 'NÃO'}")
-            log(f"SENHA configurada: {'sim' if SENHA else 'NÃO'}")
+            log("=== Iniciando conferencia ===")
+            log(f"USUARIO configurado: {'sim' if USUARIO else 'NAO'}")
+            log(f"SENHA configurada: {'sim' if SENHA else 'NAO'}")
             log(f"BASE_URL: {BASE_URL}")
 
             if not USUARIO or not SENHA:
                 return self._json(500, {
-                    "error": "Credenciais não configuradas",
+                    "error": "Credenciais nao configuradas",
                     "detail": "Defina LIVEPDV_USUARIO e LIVEPDV_SENHA nas env vars do Vercel",
                 })
 
-            # Tenta ler ?data=YYYY-MM-DD da URL; senão usa data operacional
             data_ref = self._resolver_data()
-            log(f"Data de referência: {data_ref}")
+            log(f"Data de referencia: {data_ref}")
 
             client = MoomboxClient()
             log("Tentando login no Moombox...")
             client.login()
             log("Login OK")
 
-            log(f"Buscando relatório de pagamento para {data_ref}...")
+            log(f"Buscando relatorio de pagamento para {data_ref}...")
             vendas = client.buscar_relatorio_pagamento(data_ref)
             log(f"Vendas LivePDV recebidas: {len(vendas)}")
 
             log(f"Buscando financeiro Zoop para {data_ref}...")
             zoop = client.buscar_zoop_financeiro(data_ref)
-            log(f"Transações Zoop recebidas: {len(zoop)}")
+            log(f"Transacoes Zoop recebidas: {len(zoop)}")
 
             log("Cruzando dados...")
             resultado = cruzar(vendas, zoop)
@@ -607,9 +687,9 @@ class handler(BaseHTTPRequestHandler):
 
     def _resolver_data(self):
         """
-        Resolve a data de referência:
+        Resolve a data de referencia:
         - Se a URL tiver ?data=YYYY-MM-DD, usa essa
-        - Senão, usa a "data operacional": antes das 6h, considera ontem
+        - Senao, usa a "data operacional": antes das 6h, considera ontem
         """
         from urllib.parse import urlparse, parse_qs
         from datetime import timedelta
@@ -622,7 +702,6 @@ class handler(BaseHTTPRequestHandler):
             except (ValueError, IndexError):
                 pass
 
-        # Data operacional: antes das 6h → ontem
         agora = datetime.now()
         if agora.hour < 6:
             return (agora - timedelta(days=1)).date()
