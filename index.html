@@ -234,6 +234,8 @@ main { padding: 24px 32px; max-width: 1200px; margin: 0 auto; }
 }
 .item:hover { border-color: var(--border-hover); }
 .item.match { border-left-color: var(--warning); }
+.item.cod_errado { border-left-color: var(--accent); }
+.item.duplicado { border-left-color: #c084fc; }
 .item.divergencia { border-left-color: var(--danger); }
 .item.orfao { border-left-color: var(--danger); }
 .item.fantasma { border-left-color: var(--info); }
@@ -268,8 +270,46 @@ main { padding: 24px 32px; max-width: 1200px; margin: 0 auto; }
   width: fit-content;
 }
 .badge.match { background: rgba(250, 204, 21, 0.15); color: var(--warning); }
+.badge.cod_errado { background: rgba(212, 165, 116, 0.18); color: var(--accent); }
+.badge.duplicado { background: rgba(192, 132, 252, 0.15); color: #c084fc; }
 .badge.divergencia, .badge.orfao { background: rgba(248, 113, 113, 0.15); color: var(--danger); }
 .badge.fantasma { background: rgba(96, 165, 250, 0.15); color: var(--info); }
+
+.badge-conf {
+  display: inline-block;
+  font-size: 10px;
+  font-weight: 600;
+  padding: 2px 7px;
+  border-radius: 4px;
+  margin-left: 6px;
+  text-transform: uppercase;
+  letter-spacing: 0.4px;
+}
+.badge-conf.alta { background: rgba(74, 222, 128, 0.15); color: var(--success); }
+.badge-conf.media { background: rgba(250, 204, 21, 0.15); color: var(--warning); }
+
+.suggestion {
+  background: var(--surface-2);
+  border-radius: 6px;
+  padding: 10px 12px;
+  margin-bottom: 12px;
+  font-size: 12.5px;
+  line-height: 1.55;
+  border-left: 2px solid var(--accent);
+}
+.suggestion .stitle {
+  font-size: 10px;
+  text-transform: uppercase;
+  letter-spacing: 0.6px;
+  color: var(--text-muted);
+  margin-bottom: 4px;
+}
+.suggestion code {
+  font-family: var(--font-mono);
+  font-size: 11px;
+  color: var(--accent);
+  word-break: break-all;
+}
 
 .item-value {
   font-family: var(--font-mono);
@@ -381,11 +421,11 @@ main { padding: 24px 32px; max-width: 1200px; margin: 0 auto; }
         <div class="value" id="stat-ok">—</div>
       </div>
       <div class="stat-card warning">
-        <div class="label">Sugestões</div>
+        <div class="label">Sugestões (aceitar)</div>
         <div class="value" id="stat-match">—</div>
       </div>
       <div class="stat-card danger">
-        <div class="label">Divergências</div>
+        <div class="label">Diverg. / Duplicados</div>
         <div class="value" id="stat-diverg">—</div>
       </div>
       <div class="stat-card danger">
@@ -494,11 +534,17 @@ function marcarResolvido(id, action) {
   updateStats();
 }
 
-async function aprovarMatch(id, cupomId, codAutoriza, valorEsperado) {
-  if (!confirm(`Aprovar match: cupom ${cupomId} → cod ${codAutoriza.slice(0,16)}...?\n\nIsso vai SALVAR o código no LivePDV.`)) {
-    return;
-  }
-  // Indicador de carregamento no botão
+// Aceitar uma correção sugerida (semi-automático: o sistema sugere, você aceita).
+//   modo "preencher"  -> grava o cód num pagamento que está sem código (caso "match")
+//   modo "substituir" -> troca o cód errado pelo correto (caso "cod_errado")
+async function aceitarCorrecao(id, cupomId, codCorreto, valorEsperado, modo, codErrado) {
+  modo = modo || 'preencher';
+  const labelBtn = '✓ Aceitar correção';
+  const resumo = modo === 'substituir'
+    ? `Trocar o código do cupom ${cupomId}:\nde  ${(codErrado||'').slice(0,16)}...\npara ${codCorreto.slice(0,16)}...`
+    : `Preencher o código do cupom ${cupomId} com ${codCorreto.slice(0,16)}...`;
+  if (!confirm(`${resumo}\n\nIsso vai SALVAR a alteração no LivePDV.`)) return;
+
   const btn = event && event.target ? event.target : null;
   if (btn) { btn.disabled = true; btn.textContent = 'Salvando...'; }
 
@@ -507,9 +553,11 @@ async function aprovarMatch(id, cupomId, codAutoriza, valorEsperado) {
       method: 'POST',
       headers: { 'Content-Type': 'application/json' },
       body: JSON.stringify({
-        cupom_id: cupomId.replace(/^0+/, ''), // remove zeros à esquerda
-        cod_autoriza: codAutoriza,
+        cupom_id: String(cupomId).replace(/^0+/, ''),
+        cod_autoriza: codCorreto,
         valor_esperado: valorEsperado,
+        modo: modo,
+        cod_atual: codErrado || undefined,
       }),
     });
     const data = await res.json().catch(() => null);
@@ -517,16 +565,43 @@ async function aprovarMatch(id, cupomId, codAutoriza, valorEsperado) {
     if (!res.ok) {
       const erro = data?.error || `HTTP ${res.status}`;
       alert(`❌ Falhou: ${erro}\n\n${data?.traceback ? data.traceback.slice(0, 400) : ''}`);
-      if (btn) { btn.disabled = false; btn.textContent = '✓ Aprovar match'; }
+      if (btn) { btn.disabled = false; btn.textContent = labelBtn; }
       return;
     }
 
-    // Sucesso: marcar como aprovado localmente também
-    marcarResolvido(id, 'aprovado_livepdv');
-    alert(`✅ Match aprovado! Código salvo no LivePDV.\nCupom: ${cupomId}`);
+    marcarResolvido(id, modo === 'substituir' ? 'cod_corrigido' : 'cod_preenchido');
+    alert(`✅ Correção aplicada no LivePDV.\nCupom: ${cupomId}`);
   } catch (e) {
     alert(`❌ Erro de rede: ${e.message}`);
-    if (btn) { btn.disabled = false; btn.textContent = '✓ Aprovar match'; }
+    if (btn) { btn.disabled = false; btn.textContent = labelBtn; }
+  }
+}
+// Aceitar correção de duplicado: APAGA o pagamento de cartão do cupom.
+async function apagarPagamento(id, cupomId, valorEsperado) {
+  if (!confirm(`APAGAR o pagamento de cartão de ${fmtMoney(valorEsperado)} do cupom ${cupomId}?\n\nIsso remove a linha de cartão do cupom no LivePDV.`)) return;
+  const btn = event && event.target ? event.target : null;
+  if (btn) { btn.disabled = true; btn.textContent = 'Apagando...'; }
+  try {
+    const res = await fetch('/api/aprovar', {
+      method: 'POST',
+      headers: { 'Content-Type': 'application/json' },
+      body: JSON.stringify({
+        cupom_id: String(cupomId).replace(/^0+/, ''),
+        modo: 'apagar',
+        valor_esperado: valorEsperado,
+      }),
+    });
+    const data = await res.json().catch(() => null);
+    if (!res.ok) {
+      alert(`❌ Falhou: ${data?.error || 'HTTP ' + res.status}`);
+      if (btn) { btn.disabled = false; btn.textContent = '✓ Aceitar (apagar cartão)'; }
+      return;
+    }
+    marcarResolvido(id, 'cartao_apagado');
+    alert(`✅ Pagamento de cartão apagado do cupom ${cupomId}.`);
+  } catch (e) {
+    alert(`❌ Erro de rede: ${e.message}`);
+    if (btn) { btn.disabled = false; btn.textContent = '✓ Aceitar (apagar cartão)'; }
   }
 }
 function reabrir(id) {
@@ -544,7 +619,6 @@ async function conferir() {
   loading.classList.add('active');
   document.getElementById('lista').innerHTML = '';
 
-  // Constrói URL com data se selecionada
   const dataInput = document.getElementById('data-filter');
   const dataParam = dataInput && dataInput.value ? `?data=${dataInput.value}` : '';
   const url = API_ENDPOINT + dataParam;
@@ -591,8 +665,9 @@ async function conferir() {
 function updateStats() {
   const s = dados.stats || {};
   document.getElementById('stat-ok').textContent = s.conciliado || 0;
-  document.getElementById('stat-match').textContent = countByType('match');
-  document.getElementById('stat-diverg').textContent = countByType('divergencia');
+  // Sugestões com botão "Aceitar": preencher cód (match) + trocar cód (cod_errado)
+  document.getElementById('stat-match').textContent = countByType('match') + countByType('cod_errado');
+  document.getElementById('stat-diverg').textContent = countByType('divergencia') + countByType('duplicado');
   document.getElementById('stat-orfao').textContent = countByType('orfao') + countByType('fantasma');
 
   const filtered = filterByLoja(dados.problemas || []);
@@ -662,10 +737,18 @@ function renderItem(p) {
   const isResolved = !!resolvidos.ids[p.id];
 
   let badge, title, body, actions;
+  const confBadge = p.confianca
+    ? `<span class="badge-conf ${p.confianca}">confiança ${p.confianca}</span>`
+    : '';
 
   if (p.tipo === 'match') {
-    badge = '<span class="badge match">Sugestão de match</span>';
+    badge = `<span class="badge match">Cód. em branco</span>${confBadge}`;
     body = `
+      <div class="suggestion">
+        <div class="stitle">Correção sugerida</div>
+        Preencher o cód. de autorização do cupom <strong>#${p.cupom}</strong> com a transação Zoop
+        de ${fmtMoney(p.valor_zoop || p.valor)}: <code>${p.zoop_id}</code>${p.outros_candidatos ? ` <span style="color:var(--warning)">(há ${p.outros_candidatos} outra(s) transação(ões) no mesmo valor — confira antes)</span>` : ''}
+      </div>
       <div class="compare">
         <div>
           <div class="label">LivePDV · cupom ${p.cupom}</div>
@@ -679,7 +762,44 @@ function renderItem(p) {
     actions = isResolved
       ? `<button class="btn" onclick="reabrir('${p.id}')">Reabrir</button>`
       : `<button class="btn" onclick="marcarResolvido('${p.id}','ignorado')">Ignorar</button>
-         <button class="btn btn-success" onclick="aprovarMatch('${p.id}','${p.cupom}','${p.zoop_id}',${p.valor})">✓ Aprovar match</button>`;
+         <button class="btn btn-success" onclick="aceitarCorrecao('${p.id}','${p.cupom}','${p.zoop_id}',${p.valor},'preencher')">✓ Aceitar correção</button>`;
+  } else if (p.tipo === 'cod_errado') {
+    badge = `<span class="badge cod_errado">Cód. errado</span>${confBadge}`;
+    body = `
+      <div class="suggestion">
+        <div class="stitle">Correção sugerida</div>
+        Trocar o cód. de autorização do cupom <strong>#${p.cupom}</strong>:<br>
+        de <code>${p.cod_errado}</code><br>
+        para <code>${p.cod_certo}</code> (transação Zoop de ${fmtMoney(p.valor_zoop || p.valor)})${p.outros_candidatos ? ` <span style="color:var(--warning)">(há ${p.outros_candidatos} outra(s) no mesmo valor — confira antes)</span>` : ''}
+      </div>
+      <div class="compare">
+        <div>
+          <div class="label">LivePDV · cupom ${p.cupom} (cód atual, errado)</div>
+          <div class="data">${fmtMoney(p.valor)} · <strong>${p.cod_errado}</strong></div>
+        </div>
+        <div>
+          <div class="label">Zoop (succeeded) correto</div>
+          <div class="data">${fmtMoney(p.valor_zoop || p.valor)} · <strong>${p.cod_certo}</strong></div>
+        </div>
+      </div>`;
+    actions = isResolved
+      ? `<button class="btn" onclick="reabrir('${p.id}')">Reabrir</button>`
+      : `<button class="btn" onclick="marcarResolvido('${p.id}','ignorado')">Ignorar</button>
+         <button class="btn btn-success" onclick="aceitarCorrecao('${p.id}','${p.cupom}','${p.cod_certo}',${p.valor},'substituir','${p.cod_errado}')">✓ Aceitar correção</button>`;
+  } else if (p.tipo === 'duplicado') {
+    badge = '<span class="badge duplicado">Cartão duplicado</span>';
+    body = `
+      <div class="suggestion">
+        <div class="stitle">Correção sugerida</div>
+        O cupom <strong>#${p.cupom}</strong> tem um pagamento de cartão de ${fmtMoney(p.valor)}
+        que parece duplicado: há outro(s) lançamento(s) de mesmo valor na loja, mas só
+        ${p.zoop_no_valor} transação(ões) Zoop nesse valor.
+        Sugestão: <strong>apagar o pagamento de cartão deste cupom</strong>.
+      </div>`;
+    actions = isResolved
+      ? `<button class="btn" onclick="reabrir('${p.id}')">Reabrir</button>`
+      : `<button class="btn" onclick="marcarResolvido('${p.id}','nao_era_dup')">Não é duplicado</button>
+         <button class="btn btn-success" onclick="apagarPagamento('${p.id}','${p.cupom}',${p.valor})">✓ Aceitar (apagar cartão)</button>`;
   } else if (p.tipo === 'divergencia') {
     badge = '<span class="badge divergencia">Divergência de valor</span>';
     const delta = fmtMoney(Math.abs(p.valor_zoop - p.valor_livepdv));

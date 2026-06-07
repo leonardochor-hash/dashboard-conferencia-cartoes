@@ -87,3 +87,35 @@ Tolerância de valor: R$ 0,02 (ajustável em `TOLERANCIA_VALOR`).
 - Senha do Moombox fica nas env vars do Vercel — quem tiver acesso ao painel do Vercel vê.
 - Scraping pode quebrar se o Moombox mudar o HTML. Quando isso acontecer, ajustar os parsers.
 - A senha do dashboard (`DASHBOARD_PASSWORD`) está hardcoded no JS — qualquer um que abrir o "Ver código fonte" vê. É uma barreira fraca, não uma proteção real. Para algo mais sério, mover validação pro backend.
+
+## Novos tipos de problema (correção semi-automática)
+
+Além de match/divergência/órfão/fantasma, a engine agora identifica e sugere correção:
+
+- **Cód. errado** (`cod_errado`): cupom com código de autorização que não existe na
+  Zoop, pareado por loja+valor com uma transação Zoop órfã. Sugere TROCAR o código.
+  Botão "Aceitar correção" → `POST /api/aprovar` com `modo: "substituir"`,
+  `cod_atual` = código errado, `cod_autoriza` = ID Zoop correto.
+- **Cartão duplicado** (`duplicado`): mesmo valor lançado 2+ vezes no PDV na mesma
+  loja, mas só há 1 transação Zoop nesse valor. Sugere APAGAR o pagamento de cartão
+  do cupom duplicado. Botão "Aceitar (apagar cartão)" -> `POST /api/aprovar` com
+  `modo: "apagar"` + `valor_esperado`. ATENÇÃO: o caminho de delete (`DELETE_PATH`)
+  é uma suposição da convenção Yii2 — confirme inspecionando o Moombox.
+
+O caso "cupom com a referência de cartão de OUTRO valor" (ex: cupom R$599 apontando
+para uma transação de valor diferente) também cai em `cod_errado`: a engine acha a
+transação Zoop do MESMO valor do cupom e sugere trocar a referência. Se não achar
+nenhuma do valor certo, vira `divergencia` (investigar manual).
+
+Cada sugestão traz `confianca`:
+- **alta**: 1 único candidato Zoop no valor → seguro aceitar.
+- **media**: mais de um candidato no mesmo valor → confira antes de aceitar.
+
+### Fluxo semi-automático
+O sistema sugere a correção; você clica em **Aceitar correção** e a alteração é
+gravada no LivePDV via `inline-update`. Nada é alterado sem o seu clique.
+
+### Modos do /api/aprovar
+- `modo: "preencher"` (default) — preenche cód em pagamento que está sem código (match).
+- `modo: "substituir"` — troca o cód errado pelo correto (cod_errado); exige `cod_atual`.
+- `modo: "apagar"` — apaga o pagamento de cartão do cupom (duplicado); exige `valor_esperado`.
