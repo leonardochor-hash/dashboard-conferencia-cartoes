@@ -21,6 +21,7 @@ import traceback
 import sys
 from datetime import datetime, date
 from http.server import BaseHTTPRequestHandler
+from urllib.parse import urlparse as _urlparse
 
 import requests
 from bs4 import BeautifulSoup
@@ -31,7 +32,12 @@ def log(msg):
     print(f"[CONFERIR] {msg}", file=sys.stderr, flush=True)
 
 
-BASE_URL = os.environ.get("LIVEPDV_BASE_URL", "https://expositores.moombox.com.br").rstrip("/")
+_raw_base = os.environ.get("LIVEPDV_BASE_URL", "https://expositores.moombox.com.br").strip()
+if "://" not in _raw_base:
+    _raw_base = "https://" + _raw_base
+_parsed_base = _urlparse(_raw_base)
+# Usa só esquema+host — ignora qualquer path (ex.: env var com /user/login no final)
+BASE_URL = f"{_parsed_base.scheme}://{_parsed_base.netloc}"
 USUARIO = os.environ.get("LIVEPDV_USUARIO", "").strip()
 SENHA = os.environ.get("LIVEPDV_SENHA", "").strip()
 
