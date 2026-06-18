@@ -418,6 +418,16 @@ def _candidatos_zoop(transacoes_zoop, zoop_usados, loja, valor):
     return cands
 
 
+def _cand_list(cands):
+    """Serializa os candidatos Zoop (mesmo valor, ainda livres) pra UI deixar
+    o usuario ESCOLHER quando ha empate de valor."""
+    return [
+        {"zoop_id": c["zoop_id"], "valor": c["valor"],
+         "cod_autorizacao": c.get("cod_autorizacao")}
+        for c in cands
+    ]
+
+
 def cruzar(vendas_livepdv, transacoes_zoop):
     """
     Cruza pagamentos LivePDV (já filtrados: só cartão/PIX máquina, sem
@@ -450,8 +460,11 @@ def cruzar(vendas_livepdv, transacoes_zoop):
     """
     from collections import defaultdict
 
-    # 1) Agrupar LivePDV
-    com_cod = defaultdict(lambda: {"valor": 0.0, "cupons": set(), "hora": "", "forma_pagto": ""})
+    # 1) Agrupar LivePDV — mantendo a quebra por CUPOM dentro de cada (loja, cod_aut)
+    #    para distinguir o RATEIO legitimo (mesmo cupom, varias linhas de marca)
+    #    do CODIGO DUPLICADO (mesmo cod_aut em cupons DIFERENTES = caso 3).
+    com_cod = defaultdict(lambda: defaultdict(
+        lambda: {"valor": 0.0, "hora": "", "forma_pagto": ""}))
     sem_cod = defaultdict(lambda: {"valor": 0.0, "hora": "", "forma_pagto": ""})
 
     for v in vendas_livepdv:
@@ -459,9 +472,8 @@ def cruzar(vendas_livepdv, transacoes_zoop):
         cod_aut = v.get("cod_aut") or ""
         valor = v["valor"]
         if cod_aut:
-            g = com_cod[(loja, cod_aut)]
+            g = com_cod[(loja, cod_aut)][v["cupom"]]
             g["valor"] += valor
-            g["cupons"].add(v["cupom"])
             g["hora"] = v.get("hora", g["hora"])
             g["forma_pagto"] = v.get("forma_pagto", g["forma_pagto"])
         else:
@@ -475,27 +487,93 @@ def cruzar(vendas_livepdv, transacoes_zoop):
     problemas = []
     conciliado = 0
 
-    # ---- PASSE 1: grupos COM cod_aut, match exato por (loja, cod_aut) ----
+    # ---- PASSE 1: grupos COM cod_aut ----
+    # Para cada (loja, cod_aut):
+    #   - 1 cupom so  -> rateio normal: soma e compara com o Zoop daquele cod.
+    #   - 2+ cupons   -> CODIGO DUPLICADO (caso 3): o MESMO cod foi colado em
+    #     cupons diferentes. So um cupom e o dono real (aquele cujo valor casa
+    #     com o Zoop); os demais ficaram com o codigo errado e precisam do cartao
+    #     correto do proprio valor (sugestao de TROCA, sempre da mesma loja).
     fantasmas_com_cod = []  # leftover pro passe 3
-    for (loja, cod_aut), g in com_cod.items():
-        valor = round(g["valor"], 2)
-        cupom_str = "/".join(sorted(g["cupons"])) if g["cupons"] else None
+    for (loja, cod_aut), cupons_map in com_cod.items():
+        cupons = list(cupons_map.items())  # [(cupom, {valor,hora,forma_pagto}), ...]
         z = zoop_index.get((loja, cod_aut))
-        if z is not None and abs(z["valor"] - valor) < TOLERANCIA_VALOR:
-            # cod bate E valor bate -> conciliado
-            conciliado += 1
-            zoop_usados.add((loja, cod_aut))
-        else:
-            # cod aponta pra NADA (z is None) OU pra transacao de valor ERRADO
-            # (ex: cupom R$599 com a referencia de um cartao de outro valor).
-            # Guarda pro passe 3 procurar a transacao Zoop do MESMO valor do
-            # cupom e sugerir TROCAR a referencia. NAO consumimos z aqui: se ele
-            # existe mas e de outro valor, deixamos livre pro cupom certo dele.
-            fantasmas_com_cod.append({
-                "loja": loja, "cod": cod_aut, "valor": valor,
-                "cupom": cupom_str, "hora": g["hora"], "forma_pagto": g["forma_pagto"],
-                "z_valor_errado": (z["valor"] if z is not None else None),
-            })
+
+        if len(cupons) == 1:
+            cupom, g = cupons[0]
+            valor = round(g["valor"], 2)
+            if z is not None and abs(z["valor"] - valor) < TOLERANCIA_VALOR:
+                # cod bate E valor bate -> conciliado
+                conciliado += 1
+                zoop_usados.add((loja, cod_aut))
+            else:
+                # cod aponta pra NADA (z is None) OU pra transacao de valor ERRADO.
+                # Guarda pro passe 3 procurar a transacao Zoop do MESMO valor do
+                # cupom e sugerir TROCAR a referencia. NAO consumimos z aqui.
+                fantasmas_com_cod.append({
+                    "loja": loja, "cod": cod_aut, "valor": valor,
+                    "cupom": cupom, "hora": g["hora"], "forma_pagto": g["forma_pagto"],
+                    "z_valor_errado": (z["valor"] if z is not None else None),
+                })
+            continue
+
+        # --- 2+ cupons com o MESMO cod_aut = codigo duplicado (caso 3) ---
+        # Descobre o "dono" provavel: o cupom cujo valor bate com o Zoop do cod.
+        dono = None
+        if z is not None:
+            casam = [c for c, gg in cupons
+                     if abs(round(gg["valor"], 2) - z["valor"]) < TOLERANCIA_VALOR]
+            if casam:
+                dono = casam[0]
+                conciliado += 1
+                zoop_usados.add((loja, cod_aut))  # o Zoop fica com o dono real
+
+        for cupom, gg in cupons:
+            if cupom == dono:
+                continue
+            valor = round(gg["valor"], 2)
+            outros = [c for c, _ in cupons if c != cupom]
+            # procura o cartao Zoop CORRETO do valor deste cupom (mesma loja)
+            cands = _candidatos_zoop(transacoes_zoop, zoop_usados, loja, valor)
+            if cands:
+                zc = cands[0]
+                problemas.append({
+                    "id": _make_id("coddup", loja, cupom, zc["zoop_id"]),
+                    "tipo": "codigo_duplicado",
+                    "loja_id": loja,
+                    "cupom": cupom,
+                    "hora": gg["hora"],
+                    "valor": valor,
+                    "valor_zoop": zc["valor"],
+                    "cod_errado": cod_aut,          # o cod duplicado (a remover)
+                    "cod_certo": zc["zoop_id"],     # o cartao correto deste cupom
+                    "cod_autorizacao": zc.get("cod_autorizacao"),
+                    "forma_pagto": gg["forma_pagto"],
+                    "compartilhado_com": outros,    # cupons que dividem o mesmo cod
+                    "dono_provavel": dono,
+                    "confianca": "alta" if (dono is not None and len(cands) == 1) else "media",
+                    "outros_candidatos": max(0, len(cands) - 1),
+                    "candidatos": _cand_list(cands),
+                })
+                zoop_usados.add((zc["loja_id"], zc["zoop_id"]))
+            else:
+                # nao achei Zoop livre do valor deste cupom -> sinaliza sem sugestao
+                problemas.append({
+                    "id": _make_id("coddup", loja, cupom, "sem_cand"),
+                    "tipo": "codigo_duplicado",
+                    "loja_id": loja,
+                    "cupom": cupom,
+                    "hora": gg["hora"],
+                    "valor": valor,
+                    "valor_zoop": None,
+                    "cod_errado": cod_aut,
+                    "cod_certo": None,
+                    "forma_pagto": gg["forma_pagto"],
+                    "compartilhado_com": outros,
+                    "dono_provavel": dono,
+                    "confianca": "media",
+                    "outros_candidatos": 0,
+                })
 
     # ---- PASSE 2: grupos SEM cod_aut, em buckets por (loja, valor) ----
     # Permite detectar duplicados: 2+ cupons de mesmo valor com 1 só Zoop.
@@ -528,6 +606,7 @@ def cruzar(vendas_livepdv, transacoes_zoop):
                     "forma_pagto": f["forma_pagto"],
                     "confianca": "media" if ambiguo else "alta",
                     "outros_candidatos": max(0, len(cands) - 1),
+                    "candidatos": _cand_list(cands),
                 })
                 zoop_usados.add((z["loja_id"], z["zoop_id"]))
                 casados += 1
@@ -580,6 +659,7 @@ def cruzar(vendas_livepdv, transacoes_zoop):
                 "forma_pagto": f["forma_pagto"],
                 "confianca": "media" if len(cands) > 1 else "alta",
                 "outros_candidatos": max(0, len(cands) - 1),
+                    "candidatos": _cand_list(cands),
             })
             zoop_usados.add((z["loja_id"], z["zoop_id"]))
         elif f.get("z_valor_errado") is not None:
