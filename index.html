@@ -235,6 +235,7 @@ main { padding: 24px 32px; max-width: 1200px; margin: 0 auto; }
 .item:hover { border-color: var(--border-hover); }
 .item.match { border-left-color: var(--warning); }
 .item.cod_errado { border-left-color: var(--accent); }
+.item.codigo_duplicado { border-left-color: #fb923c; }
 .item.duplicado { border-left-color: #c084fc; }
 .item.divergencia { border-left-color: var(--danger); }
 .item.orfao { border-left-color: var(--danger); }
@@ -271,6 +272,12 @@ main { padding: 24px 32px; max-width: 1200px; margin: 0 auto; }
 }
 .badge.match { background: rgba(250, 204, 21, 0.15); color: var(--warning); }
 .badge.cod_errado { background: rgba(212, 165, 116, 0.18); color: var(--accent); }
+.badge.codigo_duplicado { background: rgba(251, 146, 60, 0.15); color: #fb923c; }
+.cand-sel { margin-top: 10px; padding: 10px 12px; border: 1px dashed #fb923c; border-radius: 8px; background: rgba(251,146,60,0.06); }
+.cand-sel .stitle { margin-bottom: 6px; }
+.cand-opt { display: block; padding: 5px 4px; cursor: pointer; border-radius: 6px; }
+.cand-opt:hover { background: rgba(255,255,255,0.04); }
+.cand-opt input { margin-right: 8px; }
 .badge.duplicado { background: rgba(192, 132, 252, 0.15); color: #c084fc; }
 .badge.divergencia, .badge.orfao { background: rgba(248, 113, 113, 0.15); color: var(--danger); }
 .badge.fantasma { background: rgba(96, 165, 250, 0.15); color: var(--info); }
@@ -666,7 +673,7 @@ function updateStats() {
   const s = dados.stats || {};
   document.getElementById('stat-ok').textContent = s.conciliado || 0;
   // Sugestões com botão "Aceitar": preencher cód (match) + trocar cód (cod_errado)
-  document.getElementById('stat-match').textContent = countByType('match') + countByType('cod_errado');
+  document.getElementById('stat-match').textContent = countByType('match') + countByType('cod_errado') + countByType('codigo_duplicado');
   document.getElementById('stat-diverg').textContent = countByType('divergencia') + countByType('duplicado');
   document.getElementById('stat-orfao').textContent = countByType('orfao') + countByType('fantasma');
 
@@ -730,6 +737,19 @@ function renderList() {
   lista.innerHTML = items.map(renderItem).join('');
 }
 
+function codEscolhido(pid, fallback) {
+  const sel = document.querySelector(`input[name="cand_${pid}"]:checked`);
+  return sel ? sel.value : fallback;
+}
+function renderCandidatos(p) {
+  const def = p.cod_certo || p.zoop_id || '';
+  const opts = p.candidatos.map(c =>
+    `<label class="cand-opt"><input type="radio" name="cand_${p.id}" value="${c.zoop_id}" ${c.zoop_id === def ? 'checked' : ''}> `
+    + `${fmtMoney(c.valor)} · <code>${c.zoop_id}</code>${c.cod_autorizacao ? ` · aut ${c.cod_autorizacao}` : ''}</label>`
+  ).join('');
+  return `<div class="cand-sel"><div class="stitle">Escolha o cartão Zoop correto (${p.candidatos.length} no mesmo valor):</div>${opts}</div>`;
+}
+
 function renderItem(p) {
   const lojaNome = LOJA_NOMES[p.loja_id] || `Loja ${p.loja_id}`;
   const cupomText = p.cupom ? `Cupom <strong>#${p.cupom}</strong>` : '<em style="color: var(--text-dim)">sem cupom no LivePDV</em>';
@@ -762,7 +782,7 @@ function renderItem(p) {
     actions = isResolved
       ? `<button class="btn" onclick="reabrir('${p.id}')">Reabrir</button>`
       : `<button class="btn" onclick="marcarResolvido('${p.id}','ignorado')">Ignorar</button>
-         <button class="btn btn-success" onclick="aceitarCorrecao('${p.id}','${p.cupom}','${p.zoop_id}',${p.valor},'preencher')">✓ Aceitar correção</button>`;
+         <button class="btn btn-success" onclick="aceitarCorrecao('${p.id}','${p.cupom}',codEscolhido('${p.id}','${p.zoop_id}'),${p.valor},'preencher')">✓ Aceitar correção</button>`;
   } else if (p.tipo === 'cod_errado') {
     badge = `<span class="badge cod_errado">Cód. errado</span>${confBadge}`;
     body = `
@@ -785,7 +805,45 @@ function renderItem(p) {
     actions = isResolved
       ? `<button class="btn" onclick="reabrir('${p.id}')">Reabrir</button>`
       : `<button class="btn" onclick="marcarResolvido('${p.id}','ignorado')">Ignorar</button>
-         <button class="btn btn-success" onclick="aceitarCorrecao('${p.id}','${p.cupom}','${p.cod_certo}',${p.valor},'substituir','${p.cod_errado}')">✓ Aceitar correção</button>`;
+         <button class="btn btn-success" onclick="aceitarCorrecao('${p.id}','${p.cupom}',codEscolhido('${p.id}','${p.cod_certo}'),${p.valor},'substituir','${p.cod_errado}')">✓ Aceitar correção</button>`;
+  } else if (p.tipo === 'codigo_duplicado') {
+    badge = `<span class="badge codigo_duplicado">Código duplicado</span>${confBadge}`;
+    const compartil = (p.compartilhado_com && p.compartilhado_com.length)
+      ? p.compartilhado_com.map(c => '#' + c).join(', ') : '—';
+    if (p.cod_certo) {
+      body = `
+        <div class="suggestion">
+          <div class="stitle">Correção sugerida</div>
+          O código <code>${p.cod_errado}</code> está lançado em mais de um cupom (${compartil}${p.dono_provavel ? `; dono provável #${p.dono_provavel}` : ''}).
+          No cupom <strong>#${p.cupom}</strong> ele está errado.<br>
+          Trocar para <code>${p.cod_certo}</code> — transação Zoop de ${fmtMoney(p.valor_zoop || p.valor)} na mesma loja${p.outros_candidatos ? ` <span style="color:var(--warning)">(há ${p.outros_candidatos} outra(s) no mesmo valor — confira antes)</span>` : ''}
+        </div>
+        <div class="compare">
+          <div>
+            <div class="label">LivePDV · cupom ${p.cupom} (cód duplicado)</div>
+            <div class="data">${fmtMoney(p.valor)} · <strong>${p.cod_errado}</strong></div>
+          </div>
+          <div>
+            <div class="label">Zoop (succeeded) correto</div>
+            <div class="data">${fmtMoney(p.valor_zoop || p.valor)} · <strong>${p.cod_certo}</strong></div>
+          </div>
+        </div>`;
+      actions = isResolved
+        ? `<button class="btn" onclick="reabrir('${p.id}')">Reabrir</button>`
+        : `<button class="btn" onclick="marcarResolvido('${p.id}','ignorado')">Ignorar</button>
+           <button class="btn btn-success" onclick="aceitarCorrecao('${p.id}','${p.cupom}',codEscolhido('${p.id}','${p.cod_certo}'),${p.valor},'substituir','${p.cod_errado}')">✓ Aceitar correção</button>`;
+    } else {
+      body = `
+        <div class="suggestion">
+          <div class="stitle">Atenção — investigar</div>
+          O código <code>${p.cod_errado}</code> aparece em mais de um cupom (${compartil}), mas não há
+          transação Zoop de ${fmtMoney(p.valor)} livre na loja para o cupom <strong>#${p.cupom}</strong>.
+          Confira manualmente qual cartão é o correto.
+        </div>`;
+      actions = isResolved
+        ? `<button class="btn" onclick="reabrir('${p.id}')">Reabrir</button>`
+        : `<button class="btn btn-success" onclick="marcarResolvido('${p.id}','investigando')">Marcar como visto</button>`;
+    }
   } else if (p.tipo === 'duplicado') {
     badge = '<span class="badge duplicado">Cartão duplicado</span>';
     body = `
@@ -843,6 +901,10 @@ function renderItem(p) {
     actions = isResolved
       ? `<button class="btn" onclick="reabrir('${p.id}')">Reabrir</button>`
       : `<button class="btn btn-success" onclick="marcarResolvido('${p.id}','resolvido')">Marcar resolvido</button>`;
+  }
+
+  if (p.candidatos && p.candidatos.length > 1 && !isResolved) {
+    body += renderCandidatos(p);
   }
 
   const valorDisplay = p.tipo === 'divergencia'
