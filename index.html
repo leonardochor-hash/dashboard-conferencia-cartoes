@@ -416,6 +416,8 @@ main { padding: 24px 32px; max-width: 1200px; margin: 0 auto; }
       <button class="btn btn-primary" id="btn-conferir" onclick="conferir()">
         ↻ Conferir agora
       </button>
+      <button class="btn" id="btn-simular" onclick="autocorrigir(true)" title="Mostra o que seria corrigido sem alterar nada">⚙ Simular auto</button>
+      <button class="btn btn-success" id="btn-auto" onclick="autocorrigir(false)" title="Aplica só correções de confiança alta">⚡ Auto-corrigir</button>
       <button class="btn btn-icon-only" onclick="logout()" title="Sair">⎋</button>
     </div>
   </header>
@@ -456,6 +458,7 @@ main { padding: 24px 32px; max-width: 1200px; margin: 0 auto; }
       <span class="spinner"></span> Buscando dados do Moombox...
     </div>
 
+    <div id="auto-result"></div>
     <!-- Lista -->
     <div id="lista"></div>
   </main>
@@ -668,6 +671,52 @@ async function conferir() {
   }
 }
 
+// ============= AUTOCORREÇÃO =============
+const AUTO_TOKEN_KEY = 'conf_cartoes_auto_token';
+async function autocorrigir(dryRun) {
+  const dataInput = document.getElementById('data-filter');
+  const dataRef = dataInput && dataInput.value ? dataInput.value : '';
+  if (!dryRun && !confirm(`Aplicar automaticamente TODAS as correções de confiança alta${dataRef ? ' de ' + dataRef : ''}?\n\nSó match / código errado / código duplicado. Nunca apaga pagamento.\nIsso SALVA no LivePDV.`)) return;
+
+  let token = localStorage.getItem(AUTO_TOKEN_KEY) || '';
+  const out = document.getElementById('auto-result');
+  const btns = ['btn-simular','btn-auto'].map(i=>document.getElementById(i));
+  btns.forEach(b=>b.disabled=true);
+  out.innerHTML = `<div class="loading active"><span class="spinner"></span> ${dryRun ? 'Simulando' : 'Aplicando'} correções...</div>`;
+
+  try {
+    const params = new URLSearchParams();
+    if (dataRef) params.set('data', dataRef);
+    if (dryRun) params.set('dry_run', '1');
+    if (token) params.set('token', token);
+    let res = await fetch('/api/autocorrigir?' + params, { method: 'POST' });
+    if (res.status === 401) {
+      token = prompt('Token de autocorreção (AUTOCORRIGIR_TOKEN):') || '';
+      if (!token) { out.innerHTML=''; return; }
+      localStorage.setItem(AUTO_TOKEN_KEY, token);
+      params.set('token', token);
+      res = await fetch('/api/autocorrigir?' + params, { method: 'POST' });
+    }
+    const d = await res.json().catch(()=>null);
+    if (!res.ok || !d) { out.innerHTML = `<div class="empty-state" style="color:var(--danger)">Erro ${res.status}: ${d && d.error || '?'}</div>`; return; }
+    if (d.abortado) { out.innerHTML = `<div class="empty-state" style="color:var(--warning)">Abortado: ${d.abortado}</div>`; return; }
+
+    const r = d.resumo || {};
+    const li = (arr, cls) => arr.map(a => `<li>${cls==='ok'?'✓':cls==='err'?'✗':'•'} <strong>${a.tipo}</strong> loja ${a.loja_id} cupom #${a.cupom} ${fmtMoney(a.valor)}${a.payload ? ' → <code>'+String(a.payload.cod_autoriza).slice(0,14)+'…</code>' : ''}${a.motivo ? ' <span style="color:var(--text-muted)">('+a.motivo+')</span>' : ''}${a.resposta && a.resposta.error ? ' <span style="color:var(--danger)">'+a.resposta.error+'</span>' : ''}</li>`).join('');
+    out.innerHTML = `
+      <div class="suggestion" style="margin-bottom:16px">
+        <div class="stitle">${dryRun ? 'SIMULAÇÃO' : 'AUTOCORREÇÃO'} · ${d.data_referencia} · ${r.segundos}s</div>
+        Elegíveis: <strong>${r.elegiveis}</strong> · ${dryRun ? 'Seriam aplicadas' : 'Aplicadas'}: <strong>${r.aplicadas}</strong> · Falhas: <strong>${r.falhas}</strong> · Ficam manuais: <strong>${r.manuais}</strong>
+        ${d.aplicadas.length ? '<ul>'+li(d.aplicadas,'ok')+'</ul>' : ''}
+        ${d.falhas.length ? '<div class="stitle" style="color:var(--danger)">Falhas</div><ul>'+li(d.falhas,'err')+'</ul>' : ''}
+        ${d.manuais.length ? '<details><summary>Fila manual (${d.manuais.length})</summary><ul>'+li(d.manuais,'m')+'</ul></details>' : ''}
+      </div>`;
+    if (!dryRun) { (d.aplicadas||[]).forEach(a => marcarResolvido(a.id, 'auto')); conferir(); }
+  } catch (e) {
+    out.innerHTML = `<div class="empty-state" style="color:var(--danger)">${e.message}</div>`;
+  } finally { btns.forEach(b=>b.disabled=false); }
+}
+
 // ============= RENDER =============
 function updateStats() {
   const s = dados.stats || {};
@@ -784,11 +833,11 @@ function renderItem(p) {
       : `<button class="btn" onclick="marcarResolvido('${p.id}','ignorado')">Ignorar</button>
          <button class="btn btn-success" onclick="aceitarCorrecao('${p.id}','${p.cupom}',codEscolhido('${p.id}','${p.zoop_id}'),${p.valor},'preencher')">✓ Aceitar correção</button>`;
   } else if (p.tipo === 'cod_errado') {
-    badge = `<span class="badge cod_errado">Cód. errado</span>${confBadge}`;
+    badge = `<span class="badge cod_errado">${p.subtipo === 'mesmo_cod_no_cupom' ? 'Mesmo cód. em 2 pagamentos' : 'Cód. errado'}</span>${confBadge}`;
     body = `
       <div class="suggestion">
         <div class="stitle">Correção sugerida</div>
-        Trocar o cód. de autorização do cupom <strong>#${p.cupom}</strong>:<br>
+        ${p.subtipo === 'mesmo_cod_no_cupom' ? `O cupom <strong>#${p.cupom}</strong> (${fmtMoney(p.valor_cupom)}) tem 2+ pagamentos de cartão com o mesmo código. O pagamento de <strong>${fmtMoney(p.valor)}</strong> recebe o cód. correto; o outro mantém o atual.<br>` : `Trocar o cód. de autorização do cupom <strong>#${p.cupom}</strong>:<br>`}
         de <code>${p.cod_errado}</code><br>
         para <code>${p.cod_certo}</code> (transação Zoop de ${fmtMoney(p.valor_zoop || p.valor)})${p.outros_candidatos ? ` <span style="color:var(--warning)">(há ${p.outros_candidatos} outra(s) no mesmo valor — confira antes)</span>` : ''}
       </div>
@@ -871,7 +920,8 @@ function renderItem(p) {
           <div class="label">Zoop</div>
           <div class="data">${fmtMoney(p.valor_zoop)} · ${p.zoop_id}</div>
         </div>
-      </div>`;
+      </div>
+      ${p.debug ? `<div style="font-family:var(--font-mono);font-size:11px;color:var(--text-muted);margin-top:8px;word-break:break-all">célula Cod Autoriza (${p.debug.cods_distintos} hash distintos): ${p.debug.cod_txt || '(vazia)'}</div>` : ''}`;
     actions = isResolved
       ? `<button class="btn" onclick="reabrir('${p.id}')">Reabrir</button>`
       : `<button class="btn" onclick="marcarResolvido('${p.id}','investigando')">Investigar</button>
