@@ -978,7 +978,344 @@ function renderItem(p) {
 }
 
 // ============= INIT =============
-checkAuth();
+window.addEventListener("DOMContentLoaded", checkAuth);
 </script>
+<script type="application/json" id="v2-demo">{"data_referencia":"2026-10-23","totais":{"vendas_livepdv":13,"transacoes_zoop":12},"lojas":[{"loja_id":1,"nome":"Rio Sul","pdv":[{"cupom":"0100106","cod":null,"valor":45.0,"forma":"3 - Debito","data":"2026-10-23","n":"P1","status":"pendente","acoes":["3395a8d833d8"]},{"cupom":"0100100","cod":"aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa","valor":50.0,"forma":"2 - Credito à Vista","data":"2026-10-23","n":"P2","status":"ok","acoes":[],"par":"Z1"},{"cupom":"0100107","cod":null,"valor":70.0,"forma":"2 - Credito à Vista","data":"2026-10-23","n":"P3","status":"pendente","acoes":["0cf10d7210c7"]},{"cupom":"0100108","cod":null,"valor":70.0,"forma":"2 - Credito à Vista","data":"2026-10-23","n":"P4","status":"pendente","acoes":["352986f5ed04"]},{"cupom":"0100101","cod":null,"valor":80.0,"forma":"2 - Credito à Vista","data":"2026-10-23","n":"P5","status":"pendente","acoes":["938af17dea85"]},{"cupom":"0100102","cod":"99999999999999999999999999999999","valor":120.0,"forma":"2 - Credito à Vista","data":"2026-10-23","n":"P6","status":"pendente","acoes":["db713ee7bf7c"]},{"cupom":"0100105","cod":null,"valor":159.9,"forma":"2 - Credito à Vista","data":"2026-10-23","n":"P7","status":"pendente","acoes":["12c15947d62c"]},{"cupom":"0100104","cod":"dddddddddddddddddddddddddddddddd","valor":197.0,"forma":"2 - Credito à Vista","data":"2026-10-23","n":"P8","status":"pendente","acoes":["58e3f709ac26"]},{"cupom":"0100103","cod":"dddddddddddddddddddddddddddddddd","valor":310.0,"forma":"2 - Credito à Vista","data":"2026-10-23","n":"P9","status":"ok","acoes":[],"par":"Z9"}],"zoop":[{"zoop_id":"aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa","aut":"123456","valor":50,"hora":"10:01","bandeira":"Mastercard","tipo":"credit","n":"Z1","status":"ok","par":"P2"},{"zoop_id":"55555555555555555555555555555555","aut":"123456","valor":70,"hora":"16:00","bandeira":"Mastercard","tipo":"credit","n":"Z2","status":"sugerido","sugerido_para":["P3"]},{"zoop_id":"bbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbb","aut":"123456","valor":80,"hora":"10:30","bandeira":"Mastercard","tipo":"credit","n":"Z3","status":"sugerido","sugerido_para":["P5"]},{"zoop_id":"44444444444444444444444444444444","aut":"123456","valor":99,"hora":"15:00","bandeira":"Mastercard","tipo":"credit","n":"Z4","status":"sobrando"},{"zoop_id":"cccccccccccccccccccccccccccccccc","aut":"123456","valor":120,"hora":"11:02","bandeira":"Visa","tipo":"credit","n":"Z5","status":"sugerido","sugerido_para":["P6"]},{"zoop_id":"22222222222222222222222222222222","aut":"123456","valor":159.9,"hora":"13:00","bandeira":"Mastercard","tipo":"credit","n":"Z6","status":"sugerido","sugerido_para":["P7"]},{"zoop_id":"33333333333333333333333333333333","aut":"123456","valor":159.9,"hora":"13:40","bandeira":"Visa","tipo":"debit","n":"Z7","status":"sugerido","sugerido_para":["P7"]},{"zoop_id":"6f35ed11111111111111111111111111","aut":"123456","valor":197,"hora":"12:15","bandeira":"Elo","tipo":"credit","n":"Z8","status":"sugerido","sugerido_para":["P8"]},{"zoop_id":"dddddddddddddddddddddddddddddddd","aut":"123456","valor":310,"hora":"12:10","bandeira":"Mastercard","tipo":"credit","n":"Z9","status":"ok","par":"P9"}],"acoes":[{"id":"3395a8d833d8","tipo":"fantasma","subtipo":null,"p":"P1","cupom":"0100106","confianca":null,"valor":45.0,"acao":"investigar","motivo":"sem_cartao","candidatos":[],"candidatos_ids":{}},{"id":"0cf10d7210c7","tipo":"match","subtipo":null,"p":"P3","cupom":"0100107","confianca":"media","valor":70.0,"acao":"preencher","modo":"preencher","cod_atual":null,"candidatos":["Z2"],"candidatos_ids":{"Z2":"55555555555555555555555555555555"}},{"id":"352986f5ed04","tipo":"duplicado","subtipo":null,"p":"P4","cupom":"0100108","confianca":null,"valor":70.0,"acao":"gerente","motivo":"duplicado","candidatos":[],"candidatos_ids":{}},{"id":"938af17dea85","tipo":"match","subtipo":null,"p":"P5","cupom":"0100101","confianca":"alta","valor":80.0,"acao":"preencher","modo":"preencher","cod_atual":null,"candidatos":["Z3"],"candidatos_ids":{"Z3":"bbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbb"}},{"id":"db713ee7bf7c","tipo":"cod_errado","subtipo":null,"p":"P6","cupom":"0100102","confianca":"alta","valor":120.0,"acao":"trocar","modo":"substituir","cod_atual":"99999999999999999999999999999999","candidatos":["Z5"],"candidatos_ids":{"Z5":"cccccccccccccccccccccccccccccccc"}},{"id":"12c15947d62c","tipo":"match","subtipo":null,"p":"P7","cupom":"0100105","confianca":"media","valor":159.9,"acao":"preencher","modo":"preencher","cod_atual":null,"candidatos":["Z6","Z7"],"candidatos_ids":{"Z6":"22222222222222222222222222222222","Z7":"33333333333333333333333333333333"}},{"id":"58e3f709ac26","tipo":"codigo_duplicado","subtipo":null,"p":"P8","cupom":"0100104","confianca":"alta","valor":197.0,"acao":"trocar","modo":"substituir","cod_atual":"dddddddddddddddddddddddddddddddd","candidatos":["Z8"],"candidatos_ids":{"Z8":"6f35ed11111111111111111111111111"}}],"resumo":{"conferidos":2,"ajustes":5,"investigar":3}},{"loja_id":4,"nome":"Nova PS","pdv":[{"cupom":"0200201","cod":"ffffffffffffffffffffffffffffffff","valor":250.0,"forma":"2 - Credito à Vista","data":"2026-10-23","n":"P1","status":"pendente","acoes":["70fda2183ef5"]},{"cupom":"0200200","cod":"eeeeeeeeeeeeeeeeeeeeeeeeeeeeeeee","valor":489.77,"forma":"2 - Credito à Vista","data":"2026-10-23","n":"P2","status":"pendente","acoes":["7cc900ceab4d"]}],"zoop":[{"zoop_id":"eeeeeeeeeeeeeeeeeeeeeeeeeeeeeeee","aut":"123456","valor":179.8,"hora":"14:00","bandeira":"Mastercard","tipo":"credit","n":"Z1","status":"ok","par":"P2"},{"zoop_id":"ffffffffffffffffffffffffffffffff","aut":"123456","valor":240,"hora":"17:20","bandeira":"Mastercard","tipo":"credit","n":"Z2","status":"sobrando"},{"zoop_id":"77777777777777777777777777777777","aut":"123456","valor":309.97,"hora":"14:01","bandeira":"Mastercard","tipo":"credit","n":"Z3","status":"sugerido","sugerido_para":["P2"]}],"acoes":[{"id":"70fda2183ef5","tipo":"divergencia","subtipo":null,"p":"P1","cupom":"0200201","confianca":null,"valor":250.0,"acao":"investigar","motivo":"divergencia","valor_zoop":240,"z_do_codigo":"Z2","candidatos":[],"candidatos_ids":{}},{"id":"7cc900ceab4d","tipo":"cod_errado","subtipo":"mesmo_cod_no_cupom","p":"P2","cupom":"0200200","confianca":"alta","valor":309.97,"acao":"trocar","modo":"substituir","cod_atual":"eeeeeeeeeeeeeeeeeeeeeeeeeeeeeeee","parte_ok":"Z1","candidatos":["Z3"],"candidatos_ids":{"Z3":"77777777777777777777777777777777"}}],"resumo":{"conferidos":0,"ajustes":1,"investigar":2}}]}</script>
+<!-- ===================== VISÃO 2 · LADO A LADO ===================== -->
+<style>
+.view-switch { display:inline-flex; border:1px solid var(--border); border-radius:8px; overflow:hidden; }
+.view-switch button { white-space:nowrap; background:transparent; color:var(--text-muted); border:0; padding:8px 12px; font:500 13px var(--font-sans); cursor:pointer; }
+.view-switch button.on { background:var(--surface-2); color:var(--text); }
+body.v2 .stats, body.v2 .tabs, body.v2 #lista, body.v2 #auto-result, body.v2 #loja-filter,
+body.v2 #btn-simular, body.v2 #btn-auto { display:none !important; }
+#visao2 { display:none; }
+body.v2 #visao2 { display:block; }
+.v2-lojas { display:flex; gap:8px; flex-wrap:wrap; margin-bottom:14px; }
+.v2-loja { background:var(--surface); border:1px solid var(--border); color:var(--text-muted); border-radius:999px; padding:8px 16px; font:500 14px var(--font-sans); cursor:pointer; }
+.v2-loja.on { border-color:var(--accent); color:var(--text); }
+.v2-loja .n { display:inline-block; min-width:20px; margin-left:6px; padding:0 6px; border-radius:999px; background:var(--danger); color:#111; font-size:12px; }
+.v2-loja .n.zero { background:var(--success); }
+.v2-bar { display:flex; justify-content:space-between; align-items:center; gap:12px; flex-wrap:wrap; margin-bottom:12px; color:var(--text-muted); font-size:13px; }
+.v2-bar b { color:var(--text); }
+.v2-bar label { display:flex; gap:6px; align-items:center; cursor:pointer; }
+.v2-legend { display:flex; gap:14px; flex-wrap:wrap; font-size:12px; color:var(--text-muted); margin-bottom:10px; }
+.v2-legend i { display:inline-block; width:10px; height:10px; border-radius:3px; margin-right:5px; vertical-align:-1px; }
+.v2-head, .v2-row { display:grid; grid-template-columns:1fr 1fr; gap:10px; }
+.v2-head { position:sticky; top:0; z-index:2; background:var(--bg); padding:8px 0; border-bottom:1px solid var(--border); margin-bottom:8px; }
+.v2-head div { font:600 12px var(--font-sans); text-transform:uppercase; letter-spacing:.6px; color:var(--text-muted); }
+.v2-head small { text-transform:none; letter-spacing:0; font-weight:400; color:var(--text-dim); }
+.v2-row { padding:6px 0; border-bottom:1px dashed var(--border); }
+.v2-cell { display:flex; flex-direction:column; gap:8px; min-width:0; }
+.v2-empty { border:1px dashed var(--border); border-radius:10px; min-height:58px; display:flex; align-items:center; justify-content:center; color:var(--text-dim); font-size:12px; text-align:center; padding:6px; }
+.v2-card { background:var(--surface); border:1px solid var(--border); border-left:4px solid var(--border); border-radius:10px; padding:10px 12px; min-width:0; transition:box-shadow .15s, opacity .15s; }
+.v2-card.ok { border-left-color:var(--success); opacity:.75; }
+.v2-card.aj { border-left-color:var(--warning); }
+.v2-card.inv { border-left-color:var(--danger); }
+.v2-card.feito { border-left-color:var(--info); opacity:.8; }
+.v2-card.hl { box-shadow:0 0 0 2px var(--accent); opacity:1; }
+.v2-card.sel { box-shadow:0 0 0 2px var(--info); }
+.v2-card.alvo { cursor:pointer; box-shadow:0 0 0 2px var(--info); }
+.v2-card.alvo:hover { background:var(--surface-2); }
+.v2-top { display:flex; align-items:baseline; gap:8px; cursor:pointer; }
+.v2-num { font:600 13px var(--font-mono); padding:2px 7px; border-radius:6px; background:var(--surface-2); color:var(--accent); }
+.v2-val { font:500 18px var(--font-mono); white-space:nowrap; }
+.v2-sub { font-size:12px; color:var(--text-muted); margin-top:3px; overflow-wrap:anywhere; }
+.v2-sub code { font-family:var(--font-mono); font-size:11px; color:var(--text-dim); }
+.v2-tag { font-size:11px; margin-left:auto; white-space:nowrap; }
+.v2-tag.ok { color:var(--success); } .v2-tag.aj { color:var(--warning); } .v2-tag.inv { color:var(--danger); } .v2-tag.feito { color:var(--info); }
+.v2-act { margin-top:9px; padding-top:9px; border-top:1px solid var(--border); font-size:13px; }
+.v2-act p { margin-bottom:7px; }
+.v2-act .z { font:600 13px var(--font-mono); color:var(--accent); }
+.v2-chips { display:flex; gap:6px; flex-wrap:wrap; margin-bottom:8px; }
+.v2-chip { border:1px solid var(--border); background:var(--surface-2); color:var(--text); border-radius:8px; padding:5px 9px; font:500 12px var(--font-mono); cursor:pointer; }
+.v2-chip.on { border-color:var(--accent); color:var(--accent); }
+.v2-btns { display:flex; gap:6px; flex-wrap:wrap; }
+.v2-btns .btn { font-size:12px; padding:6px 11px; }
+.v2-btn-ok { background:var(--warning); color:#111; border-color:var(--warning); font-weight:600; }
+.v2-btn-ok.confirm { background:var(--success); border-color:var(--success); }
+.v2-msg { font-size:12px; margin-top:6px; }
+.v2-msg.err { color:var(--danger); } .v2-msg.okm { color:var(--success); }
+.v2-tudo-ok { text-align:center; padding:50px 10px; color:var(--success); font-size:15px; }
+.v2-toast { position:fixed; left:50%; bottom:22px; transform:translateX(-50%); background:var(--surface-2); border:1px solid var(--border); color:var(--text); padding:10px 16px; border-radius:10px; font-size:13px; z-index:50; max-width:92vw; display:none; }
+.v2-linkbar { position:sticky; top:44px; z-index:3; background:var(--info); color:#0b1220; padding:8px 12px; border-radius:8px; margin-bottom:8px; font-size:13px; display:none; justify-content:space-between; align-items:center; gap:10px; }
+.v2-linkbar button { background:#0b1220; color:#fff; border:0; border-radius:6px; padding:5px 10px; cursor:pointer; }
+@media (max-width:640px) {
+  .v2-head, .v2-row { gap:6px; }
+  .v2-card { padding:8px 9px; }
+  .v2-val { font-size:15px; }
+  .v2-tag { display:none; }
+  .view-switch button { padding:7px 9px; }
+}
+</style>
+
+<script>
+// ============= VISÃO 2 =============
+const V2_ENDPOINT = '/api/painel2';
+const V2_VIEW_KEY = 'conf_cartoes_visao';
+const V2_DEMO = new URLSearchParams(location.search).has('demo');
+let VISAO = (function(){ try { return localStorage.getItem(V2_VIEW_KEY) || 'v1'; } catch(e) { return 'v1'; } })();
+const v2 = { dados:null, data:null, loja:null, showOk:false, foco:null, escolha:{}, manual:{}, ligando:null, aplicados:{}, armado:null };
+
+function brl(v) { return (v==null||isNaN(v)) ? '—' : 'R$ ' + Number(v).toLocaleString('pt-BR',{minimumFractionDigits:2, maximumFractionDigits:2}); }
+function esc(s) { return String(s==null?'':s).replace(/[&<>"]/g, c => ({'&':'&amp;','<':'&lt;','>':'&gt;','"':'&quot;'}[c])); }
+function curto(cod) { return cod ? String(cod).slice(0,6) + '…' : ''; }
+function formaCurta(f) { return String(f||'').replace(/^\d+\s*-\s*/, ''); }
+function tipoZ(t) { return ({credit:'crédito', debit:'débito', pix:'PIX'})[String(t).toLowerCase()] || t || ''; }
+function v2Toast(msg) { const t=document.getElementById('v2-toast'); t.textContent=msg; t.style.display='block'; clearTimeout(t._h); t._h=setTimeout(()=>t.style.display='none', 4500); }
+
+function v2InitUI() {
+  const actions = document.querySelector('header .actions');
+  if (actions && !document.getElementById('view-switch')) {
+    const sw = document.createElement('div');
+    sw.className = 'view-switch'; sw.id = 'view-switch';
+    sw.innerHTML = '<button data-v="v1" onclick="setVisao(\'v1\')">☰ Lista</button><button data-v="v2" onclick="setVisao(\'v2\')">⇆ Lado a lado</button>';
+    actions.insertBefore(sw, actions.firstChild);
+  }
+  const main = document.querySelector('main');
+  if (main && !document.getElementById('visao2')) {
+    const d = document.createElement('div'); d.id = 'visao2'; main.appendChild(d);
+    const t = document.createElement('div'); t.id = 'v2-toast'; t.className = 'v2-toast'; document.body.appendChild(t);
+  }
+  v2MarcarBotoes();
+  document.body.classList.toggle('v2', VISAO === 'v2');
+}
+function v2MarcarBotoes() { document.querySelectorAll('#view-switch button').forEach(b => b.classList.toggle('on', b.dataset.v === VISAO)); }
+
+function setVisao(v) {
+  VISAO = v;
+  try { localStorage.setItem(V2_VIEW_KEY, v); } catch(e) {}
+  document.body.classList.toggle('v2', v === 'v2');
+  v2MarcarBotoes();
+  const dataSel = (document.getElementById('data-filter')||{}).value || '';
+  if (v === 'v2' && (!v2.dados || v2.data !== dataSel)) carregarV2();
+  if (v === 'v1' && (!dados || !dados.problemas || !dados.problemas.length) && typeof _conferirV1 === 'function') _conferirV1();
+}
+
+// liga a visão 2 no botão "Conferir agora" / troca de data sem mexer na visão 1
+const _conferirV1 = conferir;
+conferir = function() { return VISAO === 'v2' ? carregarV2() : _conferirV1(); };
+
+function v2KeyAplicados() { return 'conf_v2_aplicados_' + (v2.data || ''); }
+function v2LoadAplicados() { try { v2.aplicados = JSON.parse(localStorage.getItem(v2KeyAplicados()) || '{}'); } catch(e) { v2.aplicados = {}; } }
+function v2SaveAplicados() { try { localStorage.setItem(v2KeyAplicados(), JSON.stringify(v2.aplicados)); } catch(e) {} }
+
+async function carregarV2() {
+  const box = document.getElementById('visao2');
+  const btn = document.getElementById('btn-conferir');
+  const dataSel = (document.getElementById('data-filter')||{}).value || '';
+  v2.data = dataSel; v2.escolha = {}; v2.manual = {}; v2.ligando = null; v2.foco = null;
+  v2LoadAplicados();
+  box.innerHTML = '<div class="loading active"><span class="spinner"></span> Buscando vendas e cartões do dia...</div>';
+  if (btn) btn.disabled = true;
+  try {
+    let data;
+    if (V2_DEMO) { data = JSON.parse(document.getElementById('v2-demo').textContent); }
+    else {
+      const res = await fetch(V2_ENDPOINT + (dataSel ? '?data=' + dataSel : ''), { method:'POST' });
+      data = await res.json().catch(() => null);
+      if (!res.ok || !data) throw new Error((data && data.error) || ('HTTP ' + res.status));
+    }
+    v2.dados = data;
+    const lojas = data.lojas || [];
+    if (!lojas.find(l => l.loja_id === v2.loja)) {
+      const comPend = lojas.find(l => l.resumo.ajustes + l.resumo.investigar > 0);
+      v2.loja = (comPend || lojas[0] || {}).loja_id;
+    }
+    const t = data.totais || {};
+    const dr = data.data_referencia ? new Date(data.data_referencia + 'T12:00:00').toLocaleDateString('pt-BR') : '';
+    document.getElementById('header-subtitle').textContent = `${dr} · ${t.vendas_livepdv||0} linhas PDV · ${t.transacoes_zoop||0} cartões Zoop${V2_DEMO ? ' · DEMONSTRAÇÃO' : ''}`;
+    renderV2();
+  } catch (e) {
+    box.innerHTML = `<div class="empty-state"><div style="color:var(--danger);font-size:16px;margin-bottom:8px;">Erro ao buscar dados</div><div style="font-size:13px;">${esc(e.message)}</div></div>`;
+  } finally { if (btn) btn.disabled = false; }
+}
+
+function v2Loja() { return (v2.dados && v2.dados.lojas || []).find(l => l.loja_id === v2.loja); }
+function v2Pend(L) {
+  let n = 0;
+  L.acoes.forEach(a => { if (!v2.aplicados[a.id]) n++; });
+  L.zoop.forEach(z => { if (z.status === 'sobrando' && !v2ZUsada(L, z.n)) n++; });
+  return n;
+}
+function v2ZUsada(L, zn) { return L.acoes.some(a => v2.aplicados[a.id] && v2.aplicados[a.id].z === zn); }
+
+function v2Acao(L, pn) {
+  const p = L.pdv.find(x => x.n === pn);
+  const lista = L.acoes.filter(a => a.p === pn);
+  if (v2.manual[pn]) {
+    const base = lista.find(a => a.acao === 'preencher' || a.acao === 'trocar');
+    if (base) return [Object.assign({}, base, { escolhidoManual: v2.manual[pn] })];
+    const zid = v2.manual[pn];
+    return [{ id: 'manual_' + p.cupom + '_' + pn, p: pn, cupom: p.cupom, valor: p.valor, manual: true,
+      acao: p.cod ? 'trocar' : 'preencher', modo: p.cod ? 'substituir' : 'preencher', cod_atual: p.cod,
+      candidatos: [zid], escolhidoManual: zid }];
+  }
+  return lista;
+}
+function v2Escolhido(a) {
+  if (a.escolhidoManual) return a.escolhidoManual;
+  if (v2.escolha[a.id]) return v2.escolha[a.id];
+  return a.candidatos && a.candidatos.length === 1 ? a.candidatos[0] : null;
+}
+
+function renderV2() {
+  const box = document.getElementById('visao2');
+  const D = v2.dados; if (!D) return;
+  const L = v2Loja();
+  const lojaNome = l => (typeof LOJA_NOMES !== 'undefined' && LOJA_NOMES[l.loja_id]) || l.nome || ('Loja ' + l.loja_id);
+  let h = '<div class="v2-lojas">' + (D.lojas||[]).map(l => {
+    const n = v2Pend(l);
+    return `<button class="v2-loja ${l.loja_id===v2.loja?'on':''}" onclick="v2SetLoja(${l.loja_id})">${esc(lojaNome(l))}<span class="n ${n?'':'zero'}">${n||'✓'}</span></button>`;
+  }).join('') + '</div>';
+  if (!L) { box.innerHTML = h + '<div class="empty-state">Sem vendas de cartão neste dia.</div>'; return; }
+
+  const pend = v2Pend(L);
+  h += `<div class="v2-bar"><div><b>${L.resumo.conferidos}</b> conferidos · <b>${pend}</b> pendentes nesta loja</div>
+        <label><input type="checkbox" ${v2.showOk?'checked':''} onchange="v2.showOk=this.checked;renderV2()"> mostrar conferidos</label></div>
+        <div class="v2-legend"><span><i style="background:var(--warning)"></i>ajuste sugerido</span><span><i style="background:var(--danger)"></i>investigar / gerente</span><span><i style="background:var(--success)"></i>conferido</span><span><i style="background:var(--info)"></i>aplicado</span></div>`;
+  h += `<div class="v2-linkbar" id="v2-linkbar" style="display:${v2.ligando?'flex':'none'}"><span>Ligando <b>${esc(v2.ligando||'')}</b>: toque no cartão da maquininha de mesmo valor.</span><button onclick="v2.ligando=null;renderV2()">Cancelar</button></div>`;
+
+  // ---- linhas por valor ----
+  const rows = new Map();
+  const add = (key, lado, item) => { if (!rows.has(key)) rows.set(key, {v:key, P:[], Z:[]}); rows.get(key)[lado].push(item); };
+  const kv = v => Math.round(v * 100);
+  const pByN = {}; L.pdv.forEach(p => pByN[p.n] = p);
+  L.pdv.forEach(p => {
+    const sub = L.acoes.find(a => a.p === p.n && a.subtipo === 'mesmo_cod_no_cupom');
+    add(kv(sub && p.status !== 'ok' ? sub.valor : p.valor), 'P', p);
+  });
+  L.zoop.forEach(z => {
+    const par = z.status === 'ok' && z.par && pByN[z.par];
+    add(par && par.status === 'ok' ? kv(par.valor) : kv(z.valor), 'Z', z);
+  });
+  const ordem = [...rows.values()].sort((a,b) => a.v - b.v);
+  const relevante = r => v2.showOk || r.P.some(p => p.status !== 'ok') || r.Z.some(z => z.status !== 'ok') || (v2.ligando);
+
+  h += '<div class="v2-head"><div>Vendas no PDV <small>(o que foi lançado)</small></div><div>Maquininha · Zoop <small>(o que passou de verdade)</small></div></div>';
+  const vis = ordem.filter(relevante);
+  if (!vis.length) h += '<div class="v2-tudo-ok">✓ Tudo conferido nesta loja.</div>';
+  vis.forEach(r => {
+    const P = v2.showOk ? r.P : r.P.filter(p => p.status !== 'ok' || r.Z.some(z => z.status !== 'ok'));
+    const Z = v2.showOk ? r.Z : r.Z.filter(z => z.status !== 'ok' || r.P.some(p => p.status !== 'ok'));
+    h += '<div class="v2-row">';
+    h += '<div class="v2-cell">' + (P.length ? P.map(p => v2CardP(L, p)).join('') : `<div class="v2-empty">nenhuma venda de ${brl(r.v/100)}</div>`) + '</div>';
+    h += '<div class="v2-cell">' + (Z.length ? Z.map(z => v2CardZ(L, z)).join('') : `<div class="v2-empty">nenhum cartão de ${brl(r.v/100)}</div>`) + '</div>';
+    h += '</div>';
+  });
+  box.innerHTML = h;
+}
+
+function v2CardP(L, p) {
+  const acoes = v2Acao(L, p.n);
+  const feito = acoes.length && acoes.every(a => v2.aplicados[a.id]);
+  let cls = p.status === 'ok' ? 'ok' : feito ? 'feito' : acoes.some(a => a.acao==='preencher'||a.acao==='trocar') ? 'aj' : 'inv';
+  const ligados = new Set(); acoes.forEach(a => (a.candidatos||[]).forEach(c => ligados.add(c))); if (p.par) ligados.add(p.par);
+  if (v2.foco && (v2.foco === p.n || (v2.focoLig||[]).includes(p.n))) cls += ' hl';
+  if (v2.ligando === p.n) cls += ' sel';
+  const tag = {ok:'✓ conferido', aj:'ajustar', inv:'investigar', feito:'✓ aplicado'}[cls.split(' ')[0]];
+  let h = `<div class="v2-card ${cls}" id="card-${p.n}">
+    <div class="v2-top" onclick="v2Foco('${p.n}', ${JSON.stringify([...ligados])})"><span class="v2-num">${p.n}</span><span class="v2-val">${brl(p.valor)}</span><span class="v2-tag ${cls.split(' ')[0]}">${tag}</span></div>
+    <div class="v2-sub">cupom ${esc(p.cupom)} · ${esc(formaCurta(p.forma))}</div>
+    <div class="v2-sub">${p.cod ? 'código <code>' + esc(curto(p.cod)) + '</code>' : '<span style="color:var(--warning)">sem código</span>'}${p.par ? ' · par <b>' + p.par + '</b>' : ''}</div>`;
+  if (p.status !== 'ok') acoes.forEach(a => { h += v2Bloco(L, p, a); });
+  return h + '</div>';
+}
+
+function v2Bloco(L, p, a) {
+  const zBy = n => L.zoop.find(z => z.n === n);
+  const zdesc = n => { const z = zBy(n); return z ? `${z.hora||''} · ${esc(z.bandeira||'')} · ${tipoZ(z.tipo)}` : ''; };
+  if (v2.aplicados[a.id]) {
+    const ap = v2.aplicados[a.id];
+    return `<div class="v2-act"><p class="v2-msg okm">✓ Ligado a <span class="z">${ap.z}</span>. Clique em "Conferir agora" para confirmar.</p></div>`;
+  }
+  let h = '<div class="v2-act">';
+  if (a.acao === 'preencher' || a.acao === 'trocar') {
+    const esc1 = v2Escolhido(a);
+    const verbo = a.acao === 'preencher' ? 'Venda sem código do cartão.' : (a.subtipo === 'mesmo_cod_no_cupom'
+      ? `Cupom com 2 pagamentos usando o mesmo código. O de ${brl(a.valor)} está errado` + (a.parte_ok ? ` (o outro já bate com <span class="z">${a.parte_ok}</span>).` : '.')
+      : (a.tipo === 'codigo_duplicado' ? 'Este código está repetido em outro cupom.' : 'Código aponta para o cartão errado.'));
+    h += `<p>${verbo}</p>`;
+    if (a.candidatos.length > 1 && !a.escolhidoManual) {
+      h += `<p style="color:var(--warning)">Há ${a.candidatos.length} cartões de ${brl(a.valor)}. Escolha pela hora/bandeira:</p><div class="v2-chips">` +
+        a.candidatos.map(c => `<button class="v2-chip ${esc1===c?'on':''}" onclick="v2Escolher('${a.id}','${c}')">${c} · ${zdesc(c)}</button>`).join('') + '</div>';
+    } else if (esc1) {
+      h += `<p>Usar <span class="z">${esc1}</span> <span style="color:var(--text-muted)">${zdesc(esc1)}</span>${a.manual||a.escolhidoManual ? ' <i style="color:var(--info)">(escolhido por você)</i>' : ''}</p>`;
+    }
+    const armado = v2.armado === a.id;
+    h += `<div class="v2-btns"><button class="btn v2-btn-ok ${armado?'confirm':''}" ${esc1?'':'disabled'} onclick="v2Aplicar(${L.loja_id},'${p.n}','${a.id}')">${armado ? 'Confirmar ' + p.n + ' → ' + esc1 : (esc1 ? 'Ajustar ' + p.n + ' → ' + esc1 : 'Escolha o cartão')}</button>
+          <button class="btn" onclick="v2Ligar('${p.n}')">Outro cartão</button></div><div class="v2-msg" id="msg-${a.id}"></div>`;
+  } else {
+    const sobras = L.zoop.filter(z => z.status === 'sobrando' && !v2ZUsada(L, z.n));
+    const txt = {
+      sem_cartao: `Não há cartão de ${brl(p.valor)} na maquininha. Foi dinheiro ou PIX lançado como cartão? Valor digitado errado?`,
+      duplicado: `Parece lançado 2 vezes: há mais vendas de ${brl(p.valor)} sem código do que cartões desse valor. <b>Chamar o gerente</b> para apagar o pagamento repetido.`,
+      divergencia: `O código aponta para ${a.z_do_codigo ? '<span class="z">'+a.z_do_codigo+'</span>' : 'um cartão'} de ${brl(a.valor_zoop)}, mas a venda é ${brl(a.valor)}. O valor no PDV precisa ser corrigido.`,
+      codigo_duplicado_sem_cartao: `Código repetido em outro cupom e não há cartão livre de ${brl(p.valor)}. Chamar o gerente.`,
+    }[a.motivo] || 'Investigar.';
+    h += `<p>${txt}</p>`;
+    if (sobras.length && a.motivo !== 'duplicado') h += `<p style="color:var(--text-muted);font-size:12px">Cartões sobrando nesta loja: ${sobras.map(z => '<span class="z">'+z.n+'</span> '+brl(z.valor)).join(' · ')}</p>`;
+    if (a.motivo !== 'duplicado') h += `<div class="v2-btns"><button class="btn" onclick="v2Ligar('${p.n}')">Ligar a um cartão</button></div>`;
+  }
+  return h + '</div>';
+}
+
+function v2CardZ(L, z) {
+  const usada = v2ZUsada(L, z.n);
+  let st = usada ? 'feito' : z.status === 'ok' ? 'ok' : z.status === 'sugerido' ? 'aj' : 'inv';
+  const lig = z.par ? [z.par] : (z.sugerido_para || []);
+  let cls = st;
+  if (v2.foco && (v2.foco === z.n || (v2.focoLig||[]).includes(z.n))) cls += ' hl';
+  let onclick = `v2Foco('${z.n}', ${JSON.stringify(lig)})`;
+  if (v2.ligando && z.status !== 'ok' && !usada) { cls += ' alvo'; onclick = `v2Ligado('${z.n}')`; }
+  const tag = usada ? '✓ usado' : z.status === 'ok' ? '✓ ' + (z.par||'') : z.status === 'sugerido' ? '→ ' + lig.join(', ') : 'sem venda';
+  let h = `<div class="v2-card ${cls}" onclick="${onclick}">
+    <div class="v2-top"><span class="v2-num">${z.n}</span><span class="v2-val">${brl(z.valor)}</span><span class="v2-tag ${st}">${tag}</span></div>
+    <div class="v2-sub">${esc(z.hora)} · ${esc(z.bandeira)} · ${esc(tipoZ(z.tipo))}</div>
+    <div class="v2-sub">aut <code>${esc(z.aut||'—')}</code> · <code>${esc(curto(z.zoop_id))}</code></div>`;
+  if (z.status === 'sobrando' && !usada && !v2.ligando) h += `<div class="v2-act"><p>Passou na maquininha e não tem venda no PDV com este valor. Venda não lançada, ou lançada com valor/forma errados.</p></div>`;
+  return h + '</div>';
+}
+
+function v2SetLoja(id) { v2.loja = id; v2.ligando = null; v2.foco = null; renderV2(); window.scrollTo({top:0}); }
+function v2Foco(n, lig) { if (v2.foco === n) { v2.foco = null; v2.focoLig = []; } else { v2.foco = n; v2.focoLig = lig || []; } renderV2(); }
+function v2Escolher(aid, zn) { v2.escolha[aid] = zn; v2.armado = null; renderV2(); }
+function v2Ligar(pn) { v2.ligando = pn; v2.foco = null; renderV2(); v2Toast('Agora toque no cartão da maquininha (coluna da direita).'); }
+function v2Ligado(zn) {
+  const L = v2Loja(); const p = L.pdv.find(x => x.n === v2.ligando); const z = L.zoop.find(x => x.n === zn);
+  const pv = p.valor;
+  const base = L.acoes.find(a => a.p === p.n && a.subtipo === 'mesmo_cod_no_cupom');
+  const valorAlvo = base ? base.valor : pv;
+  if (Math.abs(z.valor - valorAlvo) >= 2) { v2Toast(`Valores não casam: ${p.n} ${brl(valorAlvo)} × ${zn} ${brl(z.valor)}. Corrija o valor no PDV ou chame o gerente.`); return; }
+  v2.manual[p.n] = zn; v2.ligando = null; v2.armado = null; renderV2();
+  const el = document.getElementById('card-' + p.n); if (el) el.scrollIntoView({block:'center', behavior:'smooth'});
+}
+
+async function v2Aplicar(lojaId, pn, aid) {
+  const L = (v2.dados.lojas||[]).find(l => l.loja_id === lojaId);
+  const a = v2Acao(L, pn).find(x => x.id === aid); if (!a) return;
+  const zn = v2Escolhido(a); if (!zn) return;
+  if (v2.armado !== aid) { v2.armado = aid; renderV2(); setTimeout(() => { if (v2.armado === aid) { v2.armado = null; renderV2(); } }, 5000); return; }
+  v2.armado = null;
+  const z = L.zoop.find(x => x.n === zn);
+  const payload = { cupom_id: String(a.cupom).replace(/^0+/, ''), cod_autoriza: z.zoop_id, valor_esperado: a.valor, modo: a.modo };
+  if (a.modo === 'substituir') payload.cod_atual = a.cod_atual;
+  const msg = document.getElementById('msg-' + aid);
+  if (msg) { msg.className = 'v2-msg'; msg.textContent = 'Gravando no LivePDV...'; }
+  try {
+    if (!V2_DEMO) {
+      const res = await fetch('/api/aprovar', { method:'POST', headers:{'Content-Type':'application/json'}, body: JSON.stringify(payload) });
+      const r = await res.json().catch(() => ({}));
+      if (!res.ok || !r.ok) throw new Error(r.error || ('HTTP ' + res.status));
+    }
+    v2.aplicados[aid] = { z: zn, em: new Date().toISOString(), cupom: a.cupom };
+    v2SaveAplicados(); renderV2(); v2Toast(`${pn} ligado a ${zn}${V2_DEMO ? ' (demonstração, nada foi gravado)' : ''}.`);
+  } catch (e) {
+    if (msg) { msg.className = 'v2-msg err'; msg.textContent = 'Não gravou: ' + e.message; }
+  }
+}
+
+v2InitUI();
+</script>
+
 </body>
 </html>
