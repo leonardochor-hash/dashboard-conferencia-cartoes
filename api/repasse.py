@@ -122,7 +122,7 @@ class MoomboxClient:
         ultimo = None
         for tentativa in range(2):
             try:
-                r = self.session.get(url, params={**params, toggle: "all"}, timeout=30)
+                r = self.session.get(url, params={**params, toggle: "all"}, timeout=55)
                 log(f"GET {nome} (all) status={r.status_code}")
                 if r.status_code < 500:
                     r.raise_for_status()
@@ -417,66 +417,93 @@ def montar(vendas, repasses, cadastros, adendos_por_cad):
     return linhas, so_repasse
 
 
+def buscar_cadastro(client, nome):
+    """Procura o cadastro de box pela marca e le o contrato (comissao por loja)."""
+    try:
+        r = client.session.get(f"{BASE_URL}/boxstore/cadastro", params={"CadastroSearch[nome_fantasia]": nome}, timeout=40)
+        cads = _parse_cadastros(r.text) if r.status_code == 200 else []
+    except Exception:
+        return {"nome": nome, "erro": "cadastro"}
+    alvo = _norm(nome)
+    exatos = [c for c in cads if _norm(c["marca"]) == alvo] or [c for c in cads if alvo.startswith(_norm(c["marca"]) + " ") or _norm(c["marca"]).startswith(alvo + " ")]
+    if not exatos:
+        # tenta pela primeira palavra significativa (nome no LivePDV costuma ter sufixo: "moda feminina")
+        return {"nome": nome, "cadastro": None}
+    ativos = [c for c in exatos if c["status"].lower().startswith("s")] or exatos
+    c = sorted(ativos, key=lambda x: -x["cadastro_id"])[0]
+    try:
+        r = client.session.get(f"{BASE_URL}/boxstore/adendo-info", params={"id": c["cadastro_id"]}, timeout=40)
+        ad = _parse_adendo(r.text) if r.status_code == 200 else []
+    except Exception:
+        ad = None
+    return {"nome": nome, "cadastro": c, "adendos": ad}
+
+
 class handler(BaseHTTPRequestHandler):
+    """Etapas separadas (cada uma < 60s); o navegador junta tudo:
+       GET  ?etapa=vendas&ini=&fim=     -> vendas agregadas por marca/loja/dia
+       GET  ?etapa=repasses&ini=&fim=   -> repasses agregados por nome Zoop
+       POST {etapa:'comissoes', nomes:[...]} -> contrato/comissao por marca
+    """
     def do_GET(self):
+        from urllib.parse import urlparse, parse_qs
+        qs = {k: v[0] for k, v in parse_qs(urlparse(self.path).query).items()}
+        self._run(qs)
+
+    def do_POST(self):
+        n = int(self.headers.get("Content-Length") or 0)
+        try:
+            body = json.loads(self.rfile.read(n) or b"{}")
+        except ValueError:
+            body = {}
+        self._run(body)
+
+    def _run(self, q):
         try:
             if not USUARIO or not SENHA:
                 return self._json(500, {"error": "Credenciais nao configuradas"})
-            from urllib.parse import urlparse, parse_qs
-            qs = {k: v[0] for k, v in parse_qs(urlparse(self.path).query).items()}
-            vi, vf = date.fromisoformat(qs["venda_ini"]), date.fromisoformat(qs["venda_fim"])
-            ri, rf = date.fromisoformat(qs["repasse_ini"]), date.fromisoformat(qs["repasse_fim"])
-            if (vf - vi).days > 62 or (rf - ri).days > 62:
-                return self._json(400, {"error": "Periodo maximo de 62 dias por consulta"})
+            etapa = q.get("etapa")
             client = MoomboxClient()
             client.login()
-            vendas = client._baixar_grid(f"{BASE_URL}/relatorios/relatorio-tipo-pagamento/index",
-                                         {"RelatorioTipoPagamentoForm[data]": f"{_fmt(vi)} - {_fmt(vf)}"},
-                                         "_togd9a55727", _parse_vendas, "Vendas")
-            repasses, vistos = [], set()
-            for page in range(1, 200):
-                r = client.session.get(f"{BASE_URL}/zoop/relatorio-transferencia-zoop",
-                                       params={"ZoopTransferenciasSearch[data]": f"{_fmt(ri)} - {_fmt(rf)}", "page": page}, timeout=30)
-                r.raise_for_status()
-                novos = [x for x in _parse_repasses(r.text) if x["zoop_id"] not in vistos]
-                if not novos:
-                    break
-                for x in novos:
-                    vistos.add(x["zoop_id"])
-                repasses += novos
-            cadastros = client._baixar_grid(f"{BASE_URL}/boxstore/cadastro", {}, "_tog442d68b1", _parse_cadastros, "Cadastros")
-            # adendos (comissao por loja) so das marcas que venderam no periodo
-            cad_por_nome = {}
-            for c in cadastros:
-                cad_por_nome.setdefault(_norm(c["marca"]), c)
-            ids = set()
-            for nome in {v["expositor"] for v in vendas}:
-                c = _casar(nome, cad_por_nome)
-                if c:
-                    ids.add(c["cadastro_id"])
-
-            def pega(cid):
-                try:
-                    r = client.session.get(f"{BASE_URL}/boxstore/adendo-info", params={"id": cid}, timeout=20)
-                    return cid, _parse_adendo(r.text) if r.status_code == 200 else []
-                except Exception:
-                    return cid, None
-            with ThreadPoolExecutor(max_workers=12) as ex:
-                res = list(ex.map(pega, sorted(ids)))
-            adendos = {cid: (a or []) for cid, a in res}
-            falhas = [cid for cid, a in res if a is None]
-            if falhas:
-                client.avisos.append(f"Nao consegui ler o contrato (comissao por loja) de {len(falhas)} marca(s); usei a comissao do cadastro.")
-
-            linhas, so_repasse = montar(vendas, repasses, cadastros, adendos)
-            sem_cad = [l["marca"] for l in linhas if any("sem cadastro" in o for o in l["origem_comissao"])]
-            if sem_cad:
-                client.avisos.append(f"{len(sem_cad)} marca(s) sem cadastro de box encontrado pelo nome — usei 23%: " + ", ".join(sem_cad[:15]))
-            return self._json(200, {
-                "venda": [vi.isoformat(), vf.isoformat()], "repasse": [ri.isoformat(), rf.isoformat()],
-                "linhas_venda": len(vendas), "qtd_repasses": len(repasses),
-                "marcas": linhas, "so_repasse": so_repasse, "avisos": client.avisos,
-            })
+            if etapa == "vendas":
+                ini, fim = date.fromisoformat(q["ini"]), date.fromisoformat(q["fim"])
+                linhas = client._baixar_grid(f"{BASE_URL}/relatorios/relatorio-tipo-pagamento/index",
+                                             {"RelatorioTipoPagamentoForm[data]": f"{_fmt(ini)} - {_fmt(fim)}"},
+                                             "_togd9a55727", _parse_vendas, "Vendas")
+                ag = {}
+                for v in linhas:
+                    k = (v["expositor_id"], v["loja_id"], v["data"])
+                    a = ag.setdefault(k, {"expositor_id": v["expositor_id"], "marca": v["expositor"], "loja_id": v["loja_id"], "data": v["data"], "valor": 0.0})
+                    a["valor"] += v["valor"]
+                return self._json(200, {"linhas": len(linhas), "vendas": [dict(a, valor=round(a["valor"], 2)) for a in ag.values()], "avisos": client.avisos})
+            if etapa == "repasses":
+                ini, fim = date.fromisoformat(q["ini"]), date.fromisoformat(q["fim"])
+                reps, vistos = [], set()
+                for page in range(1, 200):
+                    r = client.session.get(f"{BASE_URL}/zoop/relatorio-transferencia-zoop",
+                                           params={"ZoopTransferenciasSearch[data]": f"{_fmt(ini)} - {_fmt(fim)}", "page": page}, timeout=50)
+                    r.raise_for_status()
+                    novos = [x for x in _parse_repasses(r.text) if x["zoop_id"] not in vistos]
+                    if not novos:
+                        break
+                    for x in novos:
+                        vistos.add(x["zoop_id"])
+                    reps += novos
+                ag = {}
+                for x in reps:
+                    a = ag.setdefault(_norm(x["expositor"]), {"nome": x["expositor"], "pago": 0.0, "pendente": 0.0, "n": 0})
+                    if x["status"] == "succeeded":
+                        a["pago"] += x["valor"]
+                    elif x["status"] not in ("failed", "canceled", "cancelled", "reversed"):
+                        a["pendente"] += x["valor"]
+                    a["n"] += 1
+                return self._json(200, {"qtd": len(reps), "repasses": [dict(a, chave=k, pago=round(a["pago"], 2), pendente=round(a["pendente"], 2)) for k, a in ag.items()]})
+            if etapa == "comissoes":
+                nomes = list(dict.fromkeys(q.get("nomes") or []))[:40]
+                with ThreadPoolExecutor(max_workers=10) as ex:
+                    res = list(ex.map(lambda n: buscar_cadastro(client, n), nomes))
+                return self._json(200, {"comissoes": res})
+            return self._json(400, {"error": "etapa invalida"})
         except Exception as e:
             log(f"ERRO repasse: {type(e).__name__}: {e}\n{traceback.format_exc()}")
             return self._json(500, {"error": str(e), "type": type(e).__name__})

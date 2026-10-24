@@ -46,7 +46,7 @@ h2{font-family:var(--serif);font-weight:500;font-size:18px;margin:26px 0 10px}
     <fieldset><div><legend>Período de repasse</legend><input type="date" id="ri"> <span class="small">até</span> <input type="date" id="rf"></div></fieldset>
     <button class="btn-primary" id="btn" onclick="carregar()">↻ Comparar</button>
   </div>
-  <div id="out"><div class="empty">Escolha os períodos e clique em “Comparar”. Máximo de 62 dias por período.</div></div>
+  <div id="out"><div class="empty">Escolha os períodos e clique em “Comparar”. Períodos longos demoram mais (o LivePDV é lento).</div></div>
 </main>
 <script>
 if (sessionStorage.getItem('conf_cartoes_auth') !== 'ok') location.href = '/';
@@ -60,16 +60,68 @@ const LOJAS = { 1: 'RS antigo', 3: 'Barra', 4: 'Norte', 5: 'Rio Sul' };
   const iso = d => d.toLocaleDateString('en-CA');
   vi.value = iso(a); vf.value = iso(b); ri.value = iso(a); rf.value = iso(b);
 })();
+const norm = t => String(t || '').normalize('NFKD').replace(/[̀-ͯ]/g, '').toLowerCase().replace(/[^a-z0-9]+/g, ' ').trim();
+function chunks(ini, fim, dias) {
+  const out = []; let a = new Date(ini + 'T12:00:00'); const f = new Date(fim + 'T12:00:00');
+  while (a <= f) { const b = new Date(a); b.setDate(b.getDate() + dias - 1); const e = b > f ? f : b; out.push([a.toLocaleDateString('en-CA'), e.toLocaleDateString('en-CA')]); a = new Date(e); a.setDate(a.getDate() + 1); }
+  return out;
+}
+async function api(params, body) {
+  for (let t = 0; t < 2; t++) {
+    const r = body ? await fetch('/api/repasse', { method: 'POST', headers: { 'Content-Type': 'application/json' }, body: JSON.stringify(body) }) : await fetch('/api/repasse?' + new URLSearchParams(params));
+    const d = await r.json().catch(() => null);
+    if (r.ok && d) return d;
+    if (t === 1) throw new Error((d && d.error) || 'HTTP ' + r.status);
+  }
+}
+async function pool(tasks, n) { const res = []; let i = 0; await Promise.all(Array.from({ length: n }, async () => { while (i < tasks.length) { const k = i++; res[k] = await tasks[k](); } })); return res; }
+function comissaoDe(c, loja, data) {
+  if (c && c.adendos) for (const a of c.adendos) if (a.ativo && a.loja_id === loja && a.inicio <= data && data <= a.fim) return [a.comissao, 'contrato da loja'];
+  if (c && c.cadastro && c.cadastro.comissao != null) return [c.cadastro.comissao, 'cadastro (sem contrato da loja na data)'];
+  return [23, 'padrão 23% (cadastro não encontrado pelo nome)'];
+}
 async function carregar() {
   const out = document.getElementById('out'), btn = document.getElementById('btn');
-  btn.disabled = true; out.innerHTML = '<div class="empty">Buscando vendas, contratos e repasses no LivePDV… (pode levar até 1 minuto)</div>';
+  if (vi.value > vf.value || ri.value > rf.value) { out.innerHTML = '<div class="empty">Data inicial maior que a final.</div>'; return; }
+  btn.disabled = true;
+  const msg = t => out.innerHTML = `<div class="empty">${t}</div>`;
   try {
-    const q = new URLSearchParams({ venda_ini: vi.value, venda_fim: vf.value, repasse_ini: ri.value, repasse_fim: rf.value });
-    const r = await fetch('/api/repasse?' + q);
-    const d = await r.json().catch(() => null);
-    if (!r.ok || !d) throw new Error((d && d.error) || 'HTTP ' + r.status);
-    S.d = d;
-    document.getElementById('sub').textContent = `Venda ${fd(d.venda[0])}–${fd(d.venda[1])} (${d.linhas_venda} linhas) · repasse ${fd(d.repasse[0])}–${fd(d.repasse[1])} (${d.qtd_repasses} transferências)`;
+    const avisos = [];
+    const cv = chunks(vi.value, vf.value, 4), cr = chunks(ri.value, rf.value, 10);
+    let feito = 0; const tot = cv.length + cr.length;
+    msg(`Buscando vendas e repasses no LivePDV… 0/${tot}`);
+    const tick = () => msg(`Buscando vendas e repasses no LivePDV… ${++feito}/${tot}`);
+    const [rv, rr] = await Promise.all([
+      pool(cv.map(([a, b]) => async () => { const d = await api({ etapa: 'vendas', ini: a, fim: b }); tick(); return d; }), 3),
+      pool(cr.map(([a, b]) => async () => { const d = await api({ etapa: 'repasses', ini: a, fim: b }); tick(); return d; }), 2),
+    ]);
+    const vendas = rv.flatMap(d => d.vendas); rv.forEach(d => (d.avisos || []).forEach(a => avisos.push(a)));
+    const reps = {}; let qtdRep = 0;
+    rr.forEach(d => { qtdRep += d.qtd; d.repasses.forEach(x => { const r = reps[x.chave] || (reps[x.chave] = { nome: x.nome, pago: 0, pendente: 0, n: 0 }); r.pago += x.pago; r.pendente += x.pendente; r.n += x.n; }); });
+    const nomes = [...new Set(vendas.map(v => v.marca))];
+    const lotes = []; for (let i = 0; i < nomes.length; i += 25) lotes.push(nomes.slice(i, i + 25));
+    let fl = 0; msg(`Lendo contratos (comissão por loja)… 0/${lotes.length}`);
+    const rc = await pool(lotes.map(l => async () => { const d = await api(null, { etapa: 'comissoes', nomes: l }); msg(`Lendo contratos (comissão por loja)… ${++fl}/${lotes.length}`); return d; }), 3);
+    const com = {}; rc.forEach(d => d.comissoes.forEach(c => com[c.nome] = c));
+    const M = {};
+    vendas.forEach(v => {
+      const m = M[v.expositor_id] || (M[v.expositor_id] = { expositor_id: v.expositor_id, marca: v.marca, lojas: new Set(), bruta: 0, liquida: 0, comissao: new Set(), origem_comissao: new Set() });
+      const [pct, orig] = comissaoDe(com[v.marca], v.loja_id, v.data);
+      m.lojas.add(v.loja_id); m.bruta += v.valor; m.liquida += v.valor * (1 - pct / 100); m.comissao.add(pct); m.origem_comissao.add(orig);
+    });
+    const usados = new Set(), r2 = x => Math.round(x * 100) / 100;
+    const marcas = Object.values(M).map(m => {
+      const n = norm(m.marca); let k = reps[n] ? n : null;
+      if (!k) { const c = Object.keys(reps).filter(x => x && (n.startsWith(x + ' ') || x.startsWith(n + ' '))); if (c.length === 1) k = c[0]; }
+      const R = k ? reps[k] : null; if (k) usados.add(k);
+      const liq = r2(m.liquida), pago = R ? r2(R.pago) : 0;
+      return { expositor_id: m.expositor_id, marca: m.marca, lojas: [...m.lojas].sort(), bruta: r2(m.bruta), comissao: [...m.comissao].sort(), origem_comissao: [...m.origem_comissao], liquida: liq, repasse: pago, repasse_pendente: R ? r2(R.pendente) : 0, qtd_repasses: R ? R.n : 0, nome_zoop: R ? R.nome : null, diferenca: r2(pago - liq) };
+    });
+    const so_repasse = Object.entries(reps).filter(([k]) => !usados.has(k)).map(([k, R]) => ({ marca: R.nome, repasse: r2(R.pago), repasse_pendente: r2(R.pendente), qtd_repasses: R.n })).sort((a, b) => b.repasse - a.repasse);
+    const semCad = marcas.filter(x => x.origem_comissao.some(o => o.startsWith('padrão'))).map(x => x.marca);
+    if (semCad.length) avisos.push(`${semCad.length} marca(s) sem cadastro de box encontrado pelo nome — usei 23%: ${semCad.slice(0, 12).join(', ')}${semCad.length > 12 ? '…' : ''}`);
+    S.d = { venda: [vi.value, vf.value], repasse: [ri.value, rf.value], linhas_venda: rv.reduce((a, d) => a + d.linhas, 0), qtd_repasses: qtdRep, marcas, so_repasse, avisos };
+    document.getElementById('sub').textContent = `Venda ${fd(vi.value)}–${fd(vf.value)} (${S.d.linhas_venda} linhas) · repasse ${fd(ri.value)}–${fd(rf.value)} (${qtdRep} transferências)`;
     render();
   } catch (e) { out.innerHTML = `<div class="empty"><div style="color:var(--bad);font-size:16px;margin-bottom:6px">Erro</div>${esc(e.message)}</div>`; }
   finally { btn.disabled = false; }
