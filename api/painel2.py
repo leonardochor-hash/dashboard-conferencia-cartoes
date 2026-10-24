@@ -16,6 +16,7 @@ Variáveis de ambiente esperadas (Vercel → Settings → Environment Variables)
 
 import os
 import json
+import re
 import hashlib
 import traceback
 import sys
@@ -55,6 +56,7 @@ class MoomboxClient:
         self.session.headers.update({
             "User-Agent": "Mozilla/5.0 (X11; Linux x86_64) DashConferencia/1.0"
         })
+        self.avisos = []
 
     def login(self):
         """Faz login no LivePDV. Retorna True se ok."""
@@ -108,42 +110,111 @@ class MoomboxClient:
         log("LOGIN OK")
         return True
 
-    def buscar_relatorio_pagamento(self, data_ref: date):
+    def _baixar_grid(self, url, params, toggle, parser, nome):
         """
-        Baixa o relatório-tipo-pagamento do dia.
-        Retorna lista de dicts com itens individuais de pagamento.
+        Baixa um GridView do Moombox de forma resiliente.
+        1) tenta "Ver todos" (toggle=all) 2x;
+        2) se o Moombox der 5xx, cai para paginacao normal;
+        3) pagina que der 5xx e reprocessada linha a linha (per-page=1),
+           pulando so a(s) linha(s) que quebram o Moombox (vira aviso).
+        """
+        import time
+        ultimo = None
+        for tentativa in range(2):
+            try:
+                r = self.session.get(url, params={**params, toggle: "all"}, timeout=30)
+                log(f"GET {nome} (all) status={r.status_code}")
+                if r.status_code < 500:
+                    r.raise_for_status()
+                    return parser(r.text)
+                ultimo = r.status_code
+            except requests.exceptions.Timeout:
+                ultimo = "timeout"
+            time.sleep(1)
+        self.avisos.append(f"{nome}: Moombox deu erro ({ultimo}) no 'ver todos'; baixado pagina a pagina.")
 
-        Como a coluna 'Cod Autoriza' do LivePDV pode conter VÁRIOS pagamentos
-        concatenados (cod - valor - data - tipo - parcelas), expandimos cada linha
-        do cupom em vários itens (um por pagamento).
-        """
+        t0 = time.time()
+        def pegar(page, per_page=None):
+            q = {**params, "page": page}
+            if per_page:
+                q["per-page"] = per_page
+            r = self.session.get(url, params=q, timeout=30)
+            return r
+
+        r = pegar(1)
+        log(f"GET {nome} page=1 status={r.status_code}")
+        tamanho = 20
+        if r.status_code >= 500:
+            # ate a 1a pagina quebra: tenta linha a linha direto
+            html1 = None
+        else:
+            r.raise_for_status()
+            html1 = r.text
+        total_pags = 1
+        if html1:
+            soup = BeautifulSoup(html1, "html.parser")
+            pags = [int(a.get("data-page")) for a in soup.select("ul.pagination a[data-page]") if str(a.get("data-page")).isdigit()]
+            total_pags = (max(pags) + 1) if pags else 1
+            m = re.search(r"(\d+)\s*-\s*(\d+)\D+?(\d+)", (soup.select_one(".summary").get_text(" ") if soup.select_one(".summary") else ""))
+            if m:
+                tamanho = int(m.group(2)) - int(m.group(1)) + 1 or 20
+                total_itens = int(m.group(3))
+                total_pags = max(total_pags, -(-total_itens // max(tamanho, 1)))
+        else:
+            total_pags = 50  # desconhecido: vai ate esvaziar/repetir
+
+        itens, vistos = [], set()
+        def add(lista):
+            novos = 0
+            for it in lista:
+                k = json.dumps(it, sort_keys=True, default=str)
+                if k not in vistos:
+                    vistos.add(k); itens.append(it); novos += 1
+            return novos
+
+        for page in range(1, total_pags + 1):
+            if time.time() - t0 > 45:
+                self.avisos.append(f"{nome}: tempo esgotado na pagina {page}; resultado parcial.")
+                break
+            if page == 1 and html1 is not None:
+                add(parser(html1)); continue
+            r = pegar(page) if page > 1 or html1 is None else None
+            if r is not None and r.status_code < 500:
+                r.raise_for_status()
+                if add(parser(r.text)) == 0 and page > 1:
+                    break  # Yii repete a ultima pagina -> acabou
+                continue
+            # pagina quebrada: linha a linha
+            base = (page - 1) * tamanho
+            ruins = []
+            for i in range(1, tamanho + 1):
+                if time.time() - t0 > 45:
+                    break
+                rr = pegar(base + i, 1)
+                if rr.status_code >= 500:
+                    ruins.append(base + i); continue
+                rr.raise_for_status()
+                if add(parser(rr.text)) == 0:
+                    break
+            if ruins:
+                self.avisos.append(f"{nome}: o Moombox nao abre a(s) linha(s) {', '.join(map(str, ruins))} do relatorio (erro interno deles) — essas vendas NAO foram conferidas.")
+        if not itens and ultimo:
+            raise RuntimeError(f"{nome}: Moombox devolveu erro {ultimo} e nenhuma pagina pode ser lida.")
+        return itens
+
+    def buscar_relatorio_pagamento(self, data_ref: date):
+        """Baixa o relatorio-tipo-pagamento do dia (resiliente a 500 do Moombox)."""
         url = f"{BASE_URL}/relatorios/relatorio-tipo-pagamento/index"
         data_str = data_ref.strftime("%d/%m/%Y")
-        params = {
-            "RelatorioTipoPagamentoForm[data]": f"{data_str} - {data_str}",
-            "_togd9a55727": "all",  # "Ver todos" - trás todas as linhas
-        }
-        log(f"GET relatorio-tipo-pagamento ({data_str})")
-        r = self.session.get(url, params=params, timeout=30)
-        log(f"GET resposta: status={r.status_code}")
-        r.raise_for_status()
-        return _parse_relatorio_pagamento(r.text)
+        params = {"RelatorioTipoPagamentoForm[data]": f"{data_str} - {data_str}"}
+        return self._baixar_grid(url, params, "_togd9a55727", _parse_relatorio_pagamento, "Relatorio PDV")
 
     def buscar_zoop_financeiro(self, data_ref: date):
-        """
-        Baixa o financeiro Zoop do dia (só status=succeeded).
-        """
+        """Baixa o financeiro Zoop do dia (resiliente a 500 do Moombox)."""
         url = f"{BASE_URL}/zoop/financeiro/index"
         data_str = data_ref.strftime("%d/%m/%Y")
-        params = {
-            "TransacaoPosSearch[data]": f"{data_str} - {data_str}",
-            "_tog1149016d": "all",  # "Ver todos"
-        }
-        log(f"GET zoop/financeiro ({data_str})")
-        r = self.session.get(url, params=params, timeout=30)
-        log(f"GET resposta: status={r.status_code}")
-        r.raise_for_status()
-        return _parse_zoop_financeiro(r.text)
+        params = {"TransacaoPosSearch[data]": f"{data_str} - {data_str}"}
+        return self._baixar_grid(url, params, "_tog1149016d", _parse_zoop_financeiro, "Zoop financeiro")
 
 
 # ==================== PARSERS HTML ====================
@@ -961,6 +1032,7 @@ class handler(BaseHTTPRequestHandler):
                 "gerado_em": datetime.now().isoformat(),
                 "totais": {"vendas_livepdv": len(vendas), "transacoes_zoop": len(zoop)},
                 "lojas": montar_painel(vendas, zoop, resultado),
+                "avisos": client.avisos,
             })
         except Exception as e:
             tb = traceback.format_exc()

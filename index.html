@@ -551,8 +551,8 @@ async function aceitarCorrecao(id, cupomId, codCorreto, valorEsperado, modo, cod
   modo = modo || 'preencher';
   const labelBtn = '✓ Aceitar correção';
   const resumo = modo === 'substituir'
-    ? `Trocar o código do cupom ${cupomId}:\nde  ${(codErrado||'').slice(0,16)}...\npara ${codCorreto.slice(0,16)}...`
-    : `Preencher o código do cupom ${cupomId} com ${codCorreto.slice(0,16)}...`;
+    ? `Trocar o código do cupom ${cupomId}:\nde  ${codErrado||''}\npara ${codCorreto}`
+    : `Preencher o código do cupom ${cupomId} com ${codCorreto}`;
   if (!confirm(`${resumo}\n\nIsso vai SALVAR a alteração no LivePDV.`)) return;
 
   const btn = event && event.target ? event.target : null;
@@ -654,6 +654,7 @@ async function conferir() {
     dados = data;
     updateStats();
     renderList();
+    if (data.avisos && data.avisos.length && typeof avisosHtml === 'function') document.getElementById('lista').insertAdjacentHTML('afterbegin', avisosHtml(data.avisos));
     const ts = new Date().toLocaleTimeString('pt-BR', { hour: '2-digit', minute: '2-digit' });
     const dataRef = data.data_referencia ? new Date(data.data_referencia + 'T12:00:00').toLocaleDateString('pt-BR') : 'hoje';
     const totais = data.totais || {};
@@ -702,7 +703,7 @@ async function autocorrigir(dryRun) {
     if (d.abortado) { out.innerHTML = `<div class="empty-state" style="color:var(--warning)">Abortado: ${d.abortado}</div>`; return; }
 
     const r = d.resumo || {};
-    const li = (arr, cls) => arr.map(a => `<li>${cls==='ok'?'✓':cls==='err'?'✗':'•'} <strong>${a.tipo}</strong> loja ${a.loja_id} cupom #${a.cupom} ${fmtMoney(a.valor)}${a.payload ? ' → <code>'+String(a.payload.cod_autoriza).slice(0,14)+'…</code>' : ''}${a.motivo ? ' <span style="color:var(--text-muted)">('+a.motivo+')</span>' : ''}${a.resposta && a.resposta.error ? ' <span style="color:var(--danger)">'+a.resposta.error+'</span>' : ''}</li>`).join('');
+    const li = (arr, cls) => arr.map(a => `<li>${cls==='ok'?'✓':cls==='err'?'✗':'•'} <strong>${a.tipo}</strong> loja ${a.loja_id} cupom #${a.cupom} ${fmtMoney(a.valor)}${a.payload ? ' → <code>'+String(a.payload.cod_autoriza)+'</code>' : ''}${a.motivo ? ' <span style="color:var(--text-muted)">('+a.motivo+')</span>' : ''}${a.resposta && a.resposta.error ? ' <span style="color:var(--danger)">'+a.resposta.error+'</span>' : ''}</li>`).join('');
     out.innerHTML = `
       <div class="suggestion" style="margin-bottom:16px">
         <div class="stitle">${dryRun ? 'SIMULAÇÃO' : 'AUTOCORREÇÃO'} · ${d.data_referencia} · ${r.segundos}s</div>
@@ -1058,7 +1059,8 @@ const v2 = { dados:null, data:null, loja:null, showOk:false, foco:null, escolha:
 
 function brl(v) { return (v==null||isNaN(v)) ? '—' : 'R$ ' + Number(v).toLocaleString('pt-BR',{minimumFractionDigits:2, maximumFractionDigits:2}); }
 function esc(s) { return String(s==null?'':s).replace(/[&<>"]/g, c => ({'&':'&amp;','<':'&lt;','>':'&gt;','"':'&quot;'}[c])); }
-function curto(cod) { return cod ? String(cod).slice(0,6) + '…' : ''; }
+function curto(cod) { return cod ? String(cod) : ''; }
+function avisosHtml(a) { return (a && a.length) ? '<div style="border:1px solid var(--warning);color:var(--warning);border-radius:8px;padding:10px 12px;margin:10px 0;font-size:13px;">⚠ ' + a.map(esc).join('<br>⚠ ') + '</div>' : ''; }
 function formaCurta(f) { return String(f||'').replace(/^\d+\s*-\s*/, ''); }
 function tipoZ(t) { return ({credit:'crédito', debit:'débito', pix:'PIX'})[String(t).toLowerCase()] || t || ''; }
 function v2Toast(msg) { const t=document.getElementById('v2-toast'); t.textContent=msg; t.style.display='block'; clearTimeout(t._h); t._h=setTimeout(()=>t.style.display='none', 4500); }
@@ -1167,6 +1169,7 @@ function renderV2() {
     const n = v2Pend(l);
     return `<button class="v2-loja ${l.loja_id===v2.loja?'on':''}" onclick="v2SetLoja(${l.loja_id})">${esc(lojaNome(l))}<span class="n ${n?'':'zero'}">${n||'✓'}</span></button>`;
   }).join('') + '</div>';
+  h += avisosHtml(D.avisos);
   if (!L) { box.innerHTML = h + '<div class="empty-state">Sem vendas de cartão neste dia.</div>'; return; }
 
   const pend = v2Pend(L);
