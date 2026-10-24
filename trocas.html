@@ -84,7 +84,14 @@ async function carregar() {
     main.innerHTML = `<div class="empty"><div style="color:var(--bad);font-size:16px;margin-bottom:6px">Erro ao buscar trocas</div>${esc(e.message)}</div>`;
   } finally { btn.disabled = false; }
 }
-function pend(l) { return (l.fecha_zero ? 0 : 1) + l.trocas.filter(t => !t.mesma_marca && t.lancamentos.some(x => !S.feitos[x.id])).length + l.alertas.filter(a => a.tipo === 'sem_devolucao').length; }
+const fim = x => x.estado === 'baixado' || S.feitos[x.id];
+function pend(l) { return (l.fecha_zero ? 0 : 1) + l.trocas.filter(t => !t.mesma_marca && t.lancamentos.some(x => !fim(x))).length + l.alertas.filter(a => a.tipo === 'sem_devolucao').length; }
+function estadoTag(x) {
+  if (x.estado === 'baixado') return '<span class="tag ok">transferido</span>';
+  if (x.estado === 'pendente') return '<span class="tag info">lançado · falta transferir</span>';
+  if (S.feitos[x.id]) return '<span class="tag info">resolvido à mão</span>';
+  return `<span class="tag warn">a lançar</span> <button class="copy" onclick="copiar(this,'${num(x.valor)}')">copiar</button>`;
+}
 function zoopTxt(x) {
   if (x.seller_status === 'ok') return `<span style="color:var(--ok)">Zoop: ${esc(x.seller.fantasia)} (${esc(x.seller.nome)})</span>`;
   if (x.seller_status === 'ambiguo') return `<span style="color:var(--warn)">Zoop: mais de uma marca com esse nome (${x.seller_opcoes.map(o => esc(o.fantasia)).join(' / ')}) — lançar à mão</span>`;
@@ -92,8 +99,8 @@ function zoopTxt(x) {
 }
 async function lancarTroca(tid) {
   const L = S.d.lojas.find(l => l.loja_id === S.loja), t = L.trocas.find(x => x.id === tid);
-  const itens = t.lancamentos.filter(x => !S.feitos[x.id] && x.seller_status === 'ok');
-  const fora = t.lancamentos.filter(x => !S.feitos[x.id] && x.seller_status !== 'ok');
+  const itens = t.lancamentos.filter(x => x.estado === 'a_lancar' && !S.feitos[x.id] && x.seller_status === 'ok');
+  const fora = t.lancamentos.filter(x => x.estado === 'a_lancar' && !S.feitos[x.id] && x.seller_status !== 'ok');
   const txt = itens.map(x => `${x.tipo === 'debito' ? 'DÉBITO ' : 'CRÉDITO'} ${brl(x.valor).padStart(12)}  ${x.seller.fantasia}`).join('\n');
   if (!confirm(`Lançar no LivePDV (loja ${L.loja_id}, observação "ajuste troca sistema"):\n\n${txt}${fora.length ? '\n\nFICAM DE FORA (lançar à mão): ' + fora.map(x => x.expositor).join(', ') : ''}\n\nConfirma?`)) return;
   S.msg[tid] = 'Lançando…'; render();
@@ -102,14 +109,31 @@ async function lancarTroca(tid) {
     const d = await r.json().catch(() => null);
     if (!r.ok || !d) throw new Error((d && d.error) || 'HTTP ' + r.status);
     const linhas = d.resultados.map(z => {
-      if (z.ok) S.feitos[z.id] = true;
       const m = z.resposta && (z.resposta.message || z.resposta.raw) || z.motivo || '';
       return `${z.ok ? '<span style="color:var(--ok)">✓</span>' : '<span style="color:var(--bad)">✗</span>'} ${z.tipo} ${brl(z.valor)} ${esc(z.expositor)} ${m ? '— ' + esc(String(m).slice(0, 160)) : ''}`;
     });
-    saveFeitos();
     S.msg[tid] = linhas.join('<br>');
   } catch (e) { S.msg[tid] = '<span style="color:var(--bad)">Erro: ' + esc(e.message) + ' — confira no LivePDV antes de tentar de novo.</span>'; }
-  render();
+  carregar();
+}
+async function transferirTroca(tid) {
+  const L = S.d.lojas.find(l => l.loja_id === S.loja), t = L.trocas.find(x => x.id === tid);
+  const itens = t.lancamentos.filter(x => x.estado === 'pendente');
+  const faltando = t.lancamentos.filter(x => x.estado === 'a_lancar');
+  const txt = itens.map(x => `${x.tipo === 'debito' ? 'DÉBITO ' : 'CRÉDITO'} ${brl(x.valor).padStart(12)}  ${x.expositor}`).join('\n');
+  const aviso = faltando.length ? `\n\n⚠ ATENÇÃO: ${faltando.map(x => x.expositor).join(', ')} ainda não foi lançado. Transferindo só estes, o saldo da troca NÃO fecha em zero.` : '';
+  if (!confirm(`TRANSFERIR VALOR (efetiva na Zoop), loja ${L.loja_id}:\n\n${txt}${aviso}\n\nConfirma a transferência?`)) return;
+  S.msg[tid] = 'Transferindo…'; render();
+  try {
+    const r = await fetch('/api/trocas', { method: 'POST', headers: { 'Content-Type': 'application/json' }, body: JSON.stringify({ data: S.d.data_referencia, acao: 'transferir', ids: itens.map(x => x.id) }) });
+    const d = await r.json().catch(() => null);
+    if (!r.ok || !d) throw new Error((d && d.error) || 'HTTP ' + r.status);
+    S.msg[tid] = d.resultados.map(z => {
+      const m = z.resposta && (z.resposta.message || z.resposta.raw) || z.motivo || '';
+      return `${z.ok ? '<span style="color:var(--ok)">✓</span>' : '<span style="color:var(--bad)">✗</span>'} transferência ${z.tipo} ${brl(z.valor)} ${esc(z.expositor)} ${m ? '— ' + esc(String(m).slice(0, 160)) : ''}`;
+    }).join('<br>');
+  } catch (e) { S.msg[tid] = '<span style="color:var(--bad)">Erro: ' + esc(e.message) + ' — confira em Extrato Geral de Vendas e Transferências antes de tentar de novo.</span>'; }
+  carregar();
 }
 function marcar(id, ids) { ids.forEach(i => S.feitos[i] = true); saveFeitos(); render(); }
 function desmarcar(ids) { ids.forEach(i => delete S.feitos[i]); saveFeitos(); render(); }
@@ -122,19 +146,19 @@ function render() {
   const tot = D.total_dia || 0, zero = Math.abs(tot) <= 0.05;
   h += `<div class="card ${zero ? '' : 'alert'}" style="display:flex;justify-content:space-between;gap:10px;flex-wrap:wrap;align-items:center"><div><div style="color:var(--muted);font-size:12px;text-transform:uppercase;letter-spacing:.04em">Conferência do dia · total de trocas</div><div style="font-family:var(--mono);font-size:22px;margin-top:4px;color:${zero ? 'var(--ok)' : 'var(--warn)'}">${brl(tot)}</div></div><div style="font-size:13px;color:var(--muted);max-width:520px">${zero ? '✓ Fecha em zero: tudo que foi devolvido foi usado em compra no mesmo dia.' : '⚠ Não fecha em zero. Por loja: ' + D.lojas.filter(l => !l.fecha_zero).map(l => `<b style="color:var(--warn)">${esc(l.nome)} ${brl(l.total_dia)}</b>`).join(' · ') + '. Positivo = venda com troca sem devolução no dia; negativo = vale em aberto.'}</div></div>`;
   h += '<div class="lojas">' + D.lojas.map(l => { const n = pend(l); return `<button class="loja ${l.loja_id === S.loja ? 'on' : ''}" onclick="S.loja=${l.loja_id};render()">${l.loja_id} · ${esc(l.nome)}<span class="n ${n ? '' : 'zero'}">${n || '✓'}</span></button>`; }).join('') + '</div>';
-  h += '<div class="legend">“⚡ Lançar no LivePDV” faz os <span class="deb">débitos</span> e <span class="cred">créditos</span> em Relatório Saldo Zoop (observação “ajuste troca sistema”). Marca sem cadastro ou com nome repetido na Zoop fica de fora e é lançada à mão.</div>';
+  h += '<div class="legend"><b>1 · Lançar</b> cria os <span class="deb">débitos</span> e <span class="cred">créditos</span> (Relatório Saldo Zoop, observação “ajuste troca sistema”). <b>2 · Transferir</b> efetiva cada linha, como “Transferir Valor” no Extrato Geral de Vendas e Transferências. O status vem do próprio LivePDV, então nada é lançado ou transferido duas vezes.</div>';
   const L = D.lojas.find(l => l.loja_id === S.loja);
   L.alertas.filter(a => a.tipo === 'sem_devolucao').forEach(a => {
     h += `<div class="card alert"><div class="top"><div class="flow">Venda <b>${a.venda.cupom}</b> paga com troca · ${brl(a.venda.total)}</div><span class="tag warn">investigar</span></div><div class="obs">${esc(a.motivo)}. Pode ser troca lançada em duplicidade ou devolução feita em outra loja.</div></div>`;
   });
   L.trocas.forEach(t => {
-    const ids = t.lancamentos.map(x => x.id), feito = ids.length && ids.every(i => S.feitos[i]);
+    const ids = t.lancamentos.map(x => x.id), feito = ids.length && t.lancamentos.every(fim);
     const dev = t.devolucoes.map(d => `<b>${d.cupom}</b>${d.data !== t.venda.data ? ' (' + fdata(d.data) + ')' : ''}`).join(' + ');
-    const tag = t.mesma_marca ? '<span class="tag ok">mesma marca · nada a lançar</span>' : feito ? '<span class="tag info">lançado</span>' : t.ambiguo ? '<span class="tag warn">confira o par</span>' : '<span class="tag warn">a lançar</span>';
+    const tag = t.mesma_marca ? '<span class="tag ok">mesma marca · nada a lançar</span>' : feito ? '<span class="tag ok">concluída</span>' : t.lancamentos.some(x => x.estado === 'pendente') ? '<span class="tag info">falta transferir</span>' : t.ambiguo ? '<span class="tag warn">confira o par</span>' : '<span class="tag warn">a lançar</span>';
     h += `<div class="card ${t.mesma_marca ? 'same' : feito ? 'done' : ''}"><div class="top"><div class="flow">Devolução ${dev} → venda <b>${t.venda.cupom}</b> · ${brl(t.venda.total)}</div>${tag}</div>`;
     if (t.lancamentos.length) {
       h += `<table><tr><th>Lançamento</th><th>Marca</th><th class="num hide-sm">Parte da troca</th><th class="num">Valor líquido</th><th></th></tr>` +
-        t.lancamentos.map(x => `<tr><td class="${x.tipo === 'debito' ? 'deb' : 'cred'}">${x.tipo === 'debito' ? 'Débito' : 'Crédito'}</td><td>${x.expositor_id} · ${esc(x.expositor)}<div style="color:var(--dim);font-size:12px">cupom ${x.cupom} · ${zoopTxt(x)}</div></td><td class="num hide-sm">${brl(x.bruto)}</td><td class="num">${brl(x.valor)}${x.ajuste_centavos ? `<div style="color:var(--dim);font-size:11px" title="arredondamento para o saldo fechar em zero">${num(x.ajuste_centavos)} arred.</div>` : ''}</td><td>${S.feitos[x.id] ? '<span class="tag info">✓</span>' : `<button class="copy" onclick="copiar(this,'${num(x.valor)}')">copiar</button>`}</td></tr>`).join('') + '</table>';
+        t.lancamentos.map(x => `<tr><td class="${x.tipo === 'debito' ? 'deb' : 'cred'}">${x.tipo === 'debito' ? 'Débito' : 'Crédito'}</td><td>${x.expositor_id} · ${esc(x.expositor)}<div style="color:var(--dim);font-size:12px">cupom ${x.cupom} · ${zoopTxt(x)}</div></td><td class="num hide-sm">${brl(x.bruto)}</td><td class="num">${brl(x.valor)}${x.ajuste_centavos ? `<div style="color:var(--dim);font-size:11px" title="arredondamento para o saldo fechar em zero">${num(x.ajuste_centavos)} arred.</div>` : ''}</td><td style="white-space:nowrap">${estadoTag(x)}</td></tr>`).join('') + '</table>';
       const sDeb = t.lancamentos.filter(x => x.tipo === 'debito').reduce((a, x) => a + x.valor, 0);
       const sCre = t.lancamentos.filter(x => x.tipo === 'credito').reduce((a, x) => a + x.valor, 0);
       const saldo = Math.round((sCre - sDeb) * 100) / 100;
@@ -144,9 +168,12 @@ function render() {
       if (Math.abs(saldo) >= 0.005) h += `<div class="obs" style="color:var(--bad)">Saldo diferente de zero — não lance antes de entender a diferença.</div>`;
       else if (Math.abs(saldoPode) >= 0.005) h += `<div class="obs" style="color:var(--warn)">Só dá para lançar automático as marcas com cadastro na Zoop: o automático fica com saldo ${brl(saldoPode)} até a(s) marca(s) em vermelho serem lançadas à mão.</div>`;
       h += `<div class="obs">Observação: ajuste troca sistema <button class="copy" onclick="copiar(this,'ajuste troca sistema')">copiar</button>${t.ambiguo ? '<br><span style="color:var(--warn)">Há mais de uma devolução com esse valor — confirme o cupom de devolução antes de lançar.</span>' : ''}${Math.abs(t.diferenca) >= 0.01 ? `<br>Diferença de arredondamento entre devolução e venda: ${brl(t.diferenca)}` : ''}</div>`;
-      const faltam = t.lancamentos.filter(x => !S.feitos[x.id]);
-      const prontos = faltam.filter(x => x.seller_status === 'ok');
-      h += `<div class="foot" style="gap:8px;flex-wrap:wrap">${feito ? `<button onclick='desmarcar(${JSON.stringify(ids)})'>Desfazer marcação</button>` : `<button onclick='marcar("${t.id}",${JSON.stringify(faltam.map(x => x.id))})'>Já lancei à mão</button><button class="btn-primary" ${prontos.length ? '' : 'disabled'} onclick='lancarTroca("${t.id}")'>⚡ Lançar ${prontos.length} no LivePDV</button>`}</div>`;
+      const aLancar = t.lancamentos.filter(x => x.estado === 'a_lancar' && !S.feitos[x.id]);
+      const prontos = aLancar.filter(x => x.seller_status === 'ok');
+      const semZoop = aLancar.filter(x => x.seller_status !== 'ok');
+      const pendTr = t.lancamentos.filter(x => x.estado === 'pendente');
+      const manuais = t.lancamentos.filter(x => S.feitos[x.id] && x.estado !== 'baixado').map(x => x.id);
+      h += `<div class="foot" style="gap:8px;flex-wrap:wrap">${feito ? (manuais.length ? `<button onclick='desmarcar(${JSON.stringify(manuais)})'>Desfazer marcação manual</button>` : '') : `${semZoop.length ? `<button onclick='marcar("${t.id}",${JSON.stringify(semZoop.map(x => x.id))})'>Já resolvi à mão (${semZoop.length})</button>` : ''}<button class="btn-primary" ${prontos.length ? '' : 'disabled'} onclick='lancarTroca("${t.id}")'>⚡ 1 · Lançar ${prontos.length}</button><button class="btn-primary" ${pendTr.length ? '' : 'disabled'} onclick='transferirTroca("${t.id}")'>⇄ 2 · Transferir ${pendTr.length}</button>`}</div>`;
       if (S.msg[t.id]) h += `<div class="obs">${S.msg[t.id]}</div>`;
     }
     h += '</div>';

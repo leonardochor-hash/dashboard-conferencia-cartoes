@@ -493,6 +493,109 @@ def lancar(client, loja_id, x, csrf):
     return {"ok": ok, "http": r.status_code, "resposta": body}
 
 
+# ==================== COMPENSACAO (Extrato Geral de Vendas e Transferencias) ====================
+# O lancamento (passo 1) cria uma linha "pendente" em /vendas/compensacao.
+# "Transferir Valor" (passo 2) efetiva a linha -> situacao "baixado".
+
+COMP_URL = "/vendas/compensacao"
+
+
+def _parse_compensacao(html):
+    soup = BeautifulSoup(html, "html.parser")
+    out = []
+    for tr in soup.select("table tbody tr[data-key]"):
+        c = {td.get("data-col-seq"): td.get_text(" ", strip=True) for td in tr.find_all("td") if td.get("data-col-seq") is not None}
+        try:
+            valor = float(str(c.get("5", "")).replace(",", "."))
+        except ValueError:
+            continue
+        rid = c.get("12", "")
+        if not rid.isdigit():
+            continue
+        dm = re.search(r"(\d{2})/(\d{2})/(\d{4})", c.get("2", ""))
+        out.append({
+            "row_id": int(rid),
+            "fornecedor": int(c.get("11") or 0) if (c.get("11") or "").isdigit() else 0,
+            "fornecedor_nome": c.get("1", ""),
+            "data": f"{dm.group(3)}-{dm.group(2)}-{dm.group(1)}" if dm else "",
+            "loja": c.get("3", ""),
+            "cupom": int(c.get("4")) if (c.get("4") or "").isdigit() else 0,
+            "valor": valor,
+            "situacao": c.get("6", "").lower(),
+            "observacao": c.get("9", ""),
+        })
+    return out
+
+
+def carregar_compensacoes(client, desde: date):
+    from datetime import timedelta
+    ate = datetime.now().date() + timedelta(days=1)
+    params = {"CompensacaoSearch[data]": f"{desde.strftime('%d/%m/%Y')} - {ate.strftime('%d/%m/%Y')}"}
+    rows = client._baixar_grid(BASE_URL + COMP_URL, params, "_tog2a420b16", _parse_compensacao, "Compensacao")
+    return [r for r in rows if "ajuste troca sistema" in r["observacao"].lower()]
+
+
+def anexar_compensacoes(lojas, comps):
+    """Marca cada lancamento como a_lancar / pendente (lancado, falta transferir) / baixado."""
+    usados = set()
+    for L in lojas:
+        for t in L["trocas"]:
+            for x in t["lancamentos"]:
+                sinal = -1 if x["tipo"] == "debito" else 1
+                achou = None
+                for r in comps:
+                    if r["row_id"] in usados:
+                        continue
+                    if r["fornecedor"] == x["expositor_id"] and r["cupom"] == int(x["cupom"]) and abs(r["valor"] - sinal * x["valor"]) < 0.005:
+                        achou = r
+                        break
+                if achou:
+                    usados.add(achou["row_id"])
+                    x["comp"] = {"row_id": achou["row_id"], "situacao": achou["situacao"], "data": achou["data"]}
+                    x["estado"] = "baixado" if "baixad" in achou["situacao"] else "pendente"
+                else:
+                    x["estado"] = "a_lancar"
+
+
+def _csrf_de(client, path):
+    r = client.session.get(BASE_URL + path, timeout=30)
+    r.raise_for_status()
+    soup = BeautifulSoup(r.text, "html.parser")
+    m = soup.find("meta", {"name": "csrf-token"})
+    if m and m.get("content"):
+        return m["content"]
+    i = soup.find("input", {"name": "_csrf"})
+    if i:
+        return i.get("value", "")
+    raise RuntimeError(f"csrf nao encontrado em {path}")
+
+
+def transferir(client, loja_id, x, csrf):
+    """Mesmo POST do botao 'Transferir Valor' em /vendas/compensacao para 1 linha."""
+    comp = x["comp"]
+    sinal = -1 if x["tipo"] == "debito" else 1
+    payload = {
+        "_csrf": csrf,
+        "loja": str(loja_id),
+        "cupom": str(int(x["cupom"])),
+        "transferencia": f"{sinal * x['valor']:.2f}",
+        "fornecedor": str(x["expositor_id"]),
+        "data_venda": comp["data"],
+        "rowId": str(comp["row_id"]),
+        "observacao": OBSERVACAO,
+        "tipo": "compensacao",
+    }
+    r = client.session.post(BASE_URL + AJUSTE_URL, data=payload, timeout=40,
+                            headers={"X-Requested-With": "XMLHttpRequest", "X-CSRF-Token": csrf,
+                                     "Referer": BASE_URL + COMP_URL})
+    try:
+        body = r.json()
+    except ValueError:
+        body = {"raw": r.text[:300]}
+    ok = r.status_code < 400 and not (isinstance(body, dict) and (body.get("error") or str(body.get("status", "")).lower() in ("error", "erro", "false")))
+    return {"ok": ok, "http": r.status_code, "resposta": body}
+
+
 # ==================== HANDLER VERCEL ====================
 
 class handler(BaseHTTPRequestHandler):
@@ -531,12 +634,13 @@ class handler(BaseHTTPRequestHandler):
             lojas = montar_trocas(linhas, dia.isoformat())
             sellers = carregar_sellers(client)
             anexar_sellers(lojas, sellers)
+            comps = carregar_compensacoes(client, dia)
+            anexar_compensacoes(lojas, comps)
 
-            if body is not None and body.get("ids"):
-                # LANCAR: so os ids pedidos, recalculados aqui no servidor (nao confia no navegador)
+            if body is not None and body.get("ids") and body.get("acao") == "transferir":
+                # PASSO 2: efetiva no Zoop as linhas ja lancadas (pendentes) — 1 a 1, como na tela
                 ids = set(body["ids"])
-                dry = bool(body.get("dry_run"))
-                csrf = None if dry else _csrf(client)
+                csrf = _csrf_de(client, COMP_URL)
                 resultados = []
                 for L in lojas:
                     for t in L["trocas"]:
@@ -544,7 +648,31 @@ class handler(BaseHTTPRequestHandler):
                             if x["id"] not in ids:
                                 continue
                             item = {"id": x["id"], "tipo": x["tipo"], "expositor": x["expositor"], "valor": x["valor"], "cupom": x["cupom"]}
-                            if x["seller_status"] != "ok":
+                            if x["estado"] == "baixado":
+                                item.update(ok=True, motivo="ja transferido antes")
+                            elif x["estado"] != "pendente":
+                                item.update(ok=False, motivo="ainda nao lancado (passo 1)")
+                            else:
+                                item.update(transferir(client, L["loja_id"], x, csrf))
+                                log(f"TRANSFERENCIA troca {item}")
+                            resultados.append(item)
+                return self._json(200, {"data_referencia": dia.isoformat(), "resultados": resultados})
+
+            if body is not None and body.get("ids"):
+                # LANCAR: so os ids pedidos, recalculados aqui no servidor (nao confia no navegador)
+                ids = set(body["ids"])
+                dry = bool(body.get("dry_run"))
+                csrf = None if dry else _csrf_de(client, SALDO_URL)
+                resultados = []
+                for L in lojas:
+                    for t in L["trocas"]:
+                        for x in t["lancamentos"]:
+                            if x["id"] not in ids:
+                                continue
+                            item = {"id": x["id"], "tipo": x["tipo"], "expositor": x["expositor"], "valor": x["valor"], "cupom": x["cupom"]}
+                            if x["estado"] != "a_lancar":
+                                item.update(ok=True, motivo="ja estava lancado (nao duplicou)")
+                            elif x["seller_status"] != "ok":
                                 item.update(ok=False, motivo=f"marca {x['seller_status']} na Zoop")
                             elif dry:
                                 item.update(ok=True, simulado=True, seller=x["seller"]["fantasia"])
