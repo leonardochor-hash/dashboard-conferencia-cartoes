@@ -5,6 +5,10 @@
       "use": "@vercel/static"
     },
     {
+      "src": "trocas.html",
+      "use": "@vercel/static"
+    },
+    {
       "src": "api/conferir.py",
       "use": "@vercel/python"
     },
@@ -14,6 +18,10 @@
     },
     {
       "src": "api/painel2.py",
+      "use": "@vercel/python"
+    },
+    {
+      "src": "api/trocas.py",
       "use": "@vercel/python"
     }
   ],
@@ -29,6 +37,14 @@
     {
       "src": "/api/painel2",
       "dest": "/api/painel2.py"
+    },
+    {
+      "src": "/api/trocas",
+      "dest": "/api/trocas.py"
+    },
+    {
+      "src": "/trocas",
+      "dest": "/trocas.html"
     },
     {
       "src": "/",

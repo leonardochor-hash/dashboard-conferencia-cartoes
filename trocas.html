@@ -1,0 +1,125 @@
+<!DOCTYPE html>
+<html lang="pt-BR">
+<head>
+<meta charset="UTF-8">
+<meta name="viewport" content="width=device-width, initial-scale=1.0">
+<title>Ajuste de trocas</title>
+<link href="https://fonts.googleapis.com/css2?family=Fraunces:opsz,wght@9..144,500;9..144,600&family=JetBrains+Mono:wght@400;500&family=Inter:wght@400;500;600&display=swap" rel="stylesheet">
+<style>
+:root{--bg:#0f0f10;--surface:#1a1a1c;--border:#2a2a2e;--text:#ededee;--muted:#8a8a90;--dim:#5a5a5f;--accent:#d4a574;--ok:#4ade80;--warn:#facc15;--bad:#f87171;--info:#60a5fa;--serif:'Fraunces',Georgia,serif;--sans:'Inter',system-ui,sans-serif;--mono:'JetBrains Mono',monospace}
+*{box-sizing:border-box}body{margin:0;background:var(--bg);color:var(--text);font-family:var(--sans);font-size:14px}
+header{display:flex;justify-content:space-between;align-items:center;gap:12px;flex-wrap:wrap;padding:18px 28px;border-bottom:1px solid var(--border)}
+h1{font-family:var(--serif);font-weight:600;font-size:24px;margin:0}.sub{color:var(--muted);font-size:13px;margin-top:4px}
+.actions{display:flex;gap:10px;align-items:center;flex-wrap:wrap}
+select,button,a.btn{background:var(--surface);color:var(--text);border:1px solid var(--border);border-radius:8px;padding:9px 14px;font:inherit;cursor:pointer;text-decoration:none}
+.btn-primary{background:var(--accent);color:#1a1209;border-color:var(--accent);font-weight:600}
+button:disabled{opacity:.5;cursor:default}
+main{padding:20px 28px;max-width:1100px;margin:0 auto}
+.lojas{display:flex;gap:8px;margin-bottom:16px;flex-wrap:wrap}
+.loja{padding:8px 14px;border-radius:999px}.loja.on{border-color:var(--accent);color:var(--accent)}
+.loja .n{margin-left:8px;background:var(--warn);color:#1a1209;border-radius:999px;padding:1px 7px;font-size:12px;font-weight:600}.loja .n.zero{background:var(--ok)}
+.card{background:var(--surface);border:1px solid var(--border);border-radius:12px;padding:16px 18px;margin-bottom:14px}
+.card.done{opacity:.55}.card.alert{border-color:var(--warn)}.card.same{opacity:.7}
+.top{display:flex;justify-content:space-between;gap:10px;flex-wrap:wrap;align-items:baseline}
+.flow{font-size:14px}.flow b{font-family:var(--mono);font-weight:500}
+.tag{font-size:11px;padding:2px 8px;border-radius:999px;border:1px solid currentColor}
+.tag.warn{color:var(--warn)}.tag.ok{color:var(--ok)}.tag.info{color:var(--info)}.tag.bad{color:var(--bad)}
+table{width:100%;border-collapse:collapse;margin-top:12px}
+td,th{padding:8px 6px;border-top:1px solid var(--border);text-align:left;vertical-align:middle}
+th{font-size:11px;text-transform:uppercase;letter-spacing:.04em;color:var(--dim);font-weight:500;border-top:none}
+td.num{font-family:var(--mono);text-align:right;white-space:nowrap}th.num{text-align:right}
+.deb{color:var(--bad);font-weight:600}.cred{color:var(--ok);font-weight:600}
+.copy{padding:3px 8px;font-size:12px;border-radius:6px}
+.obs{color:var(--muted);font-size:12px;margin-top:10px;font-family:var(--mono);overflow-wrap:anywhere}
+.foot{display:flex;justify-content:flex-end;margin-top:12px}
+.empty{color:var(--muted);text-align:center;padding:50px 10px}
+.aviso{border:1px solid var(--warn);color:var(--warn);border-radius:8px;padding:10px 12px;margin-bottom:14px;font-size:13px}
+.legend{color:var(--muted);font-size:12px;margin-bottom:14px}
+@media(max-width:640px){header,main{padding:14px 16px}td,th{padding:7px 3px;font-size:13px}.hide-sm{display:none}}
+</style>
+</head>
+<body>
+<header>
+  <div><h1>Ajuste de trocas</h1><div class="sub" id="sub">Débito de quem devolveu · crédito de quem vendeu com o vale</div></div>
+  <div class="actions">
+    <a class="btn" href="/">← Cartões</a>
+    <select id="dia"></select>
+    <button class="btn-primary" id="btn" onclick="carregar()">↻ Buscar trocas</button>
+  </div>
+</header>
+<main id="main"><div class="empty">Escolha o dia e clique em “Buscar trocas”.</div></main>
+<script>
+if (sessionStorage.getItem('conf_cartoes_auth') !== 'ok') location.href = '/';
+const S = { d: null, loja: null, feitos: {} };
+const brl = v => 'R$ ' + Number(v).toLocaleString('pt-BR', { minimumFractionDigits: 2, maximumFractionDigits: 2 });
+const num = v => Number(v).toLocaleString('pt-BR', { minimumFractionDigits: 2, maximumFractionDigits: 2 });
+const esc = s => String(s ?? '').replace(/[&<>"]/g, c => ({ '&': '&amp;', '<': '&lt;', '>': '&gt;', '"': '&quot;' }[c]));
+const fdata = iso => iso ? iso.split('-').reverse().join('/') : '';
+const KEY = () => 'trocas_feitos_' + (S.d && S.d.data_referencia);
+function loadFeitos() { try { S.feitos = JSON.parse(localStorage.getItem(KEY()) || '{}'); } catch (e) { S.feitos = {}; } }
+function saveFeitos() { try { localStorage.setItem(KEY(), JSON.stringify(S.feitos)); } catch (e) {} }
+
+(function () {
+  const sel = document.getElementById('dia');
+  for (let i = 1; i <= 14; i++) {
+    const d = new Date(); d.setDate(d.getDate() - i);
+    const iso = d.toLocaleDateString('en-CA');
+    sel.insertAdjacentHTML('beforeend', `<option value="${iso}">${fdata(iso)}${i === 1 ? ' (ontem)' : ''}</option>`);
+  }
+})();
+
+async function carregar() {
+  const btn = document.getElementById('btn'), main = document.getElementById('main');
+  btn.disabled = true;
+  main.innerHTML = '<div class="empty">Buscando trocas no LivePDV…</div>';
+  try {
+    const r = await fetch('/api/trocas?data=' + document.getElementById('dia').value);
+    const d = await r.json().catch(() => null);
+    if (!r.ok || !d) throw new Error((d && d.error) || 'HTTP ' + r.status);
+    S.d = d; loadFeitos();
+    if (!d.lojas.find(l => l.loja_id === S.loja)) S.loja = (d.lojas.find(l => pend(l)) || d.lojas[0] || {}).loja_id;
+    document.getElementById('sub').textContent = `${fdata(d.data_referencia)} · ${d.linhas} linhas de troca lidas (devoluções buscadas desde ${fdata(d.janela[0])}) · líquido ${Math.round(d.pct_liquido * 100)}%`;
+    render();
+  } catch (e) {
+    main.innerHTML = `<div class="empty"><div style="color:var(--bad);font-size:16px;margin-bottom:6px">Erro ao buscar trocas</div>${esc(e.message)}</div>`;
+  } finally { btn.disabled = false; }
+}
+function pend(l) { return (l.fecha_zero ? 0 : 1) + l.trocas.filter(t => !t.mesma_marca && t.lancamentos.some(x => !S.feitos[x.id])).length + l.alertas.filter(a => a.tipo === 'sem_devolucao').length; }
+function marcar(id, ids) { ids.forEach(i => S.feitos[i] = true); saveFeitos(); render(); }
+function desmarcar(ids) { ids.forEach(i => delete S.feitos[i]); saveFeitos(); render(); }
+function copiar(b, txt) { navigator.clipboard && navigator.clipboard.writeText(txt); const o = b.textContent; b.textContent = '✓'; setTimeout(() => b.textContent = o, 900); }
+
+function render() {
+  const D = S.d, main = document.getElementById('main');
+  let h = (D.avisos || []).map(a => `<div class="aviso">⚠ ${esc(a)}</div>`).join('');
+  if (!D.lojas.length) { main.innerHTML = h + '<div class="empty">Nenhuma venda paga com troca neste dia.</div>'; return; }
+  const tot = D.total_dia || 0, zero = Math.abs(tot) <= 0.05;
+  h += `<div class="card ${zero ? '' : 'alert'}" style="display:flex;justify-content:space-between;gap:10px;flex-wrap:wrap;align-items:center"><div><div style="color:var(--muted);font-size:12px;text-transform:uppercase;letter-spacing:.04em">Conferência do dia · total de trocas</div><div style="font-family:var(--mono);font-size:22px;margin-top:4px;color:${zero ? 'var(--ok)' : 'var(--warn)'}">${brl(tot)}</div></div><div style="font-size:13px;color:var(--muted);max-width:520px">${zero ? '✓ Fecha em zero: tudo que foi devolvido foi usado em compra no mesmo dia.' : '⚠ Não fecha em zero. Por loja: ' + D.lojas.filter(l => !l.fecha_zero).map(l => `<b style="color:var(--warn)">${esc(l.nome)} ${brl(l.total_dia)}</b>`).join(' · ') + '. Positivo = venda com troca sem devolução no dia; negativo = vale em aberto.'}</div></div>`;
+  h += '<div class="lojas">' + D.lojas.map(l => { const n = pend(l); return `<button class="loja ${l.loja_id === S.loja ? 'on' : ''}" onclick="S.loja=${l.loja_id};render()">${l.loja_id} · ${esc(l.nome)}<span class="n ${n ? '' : 'zero'}">${n || '✓'}</span></button>`; }).join('') + '</div>';
+  h += '<div class="legend">Lance cada linha em <b>Relatório Saldo Zoop</b> → marca → <span class="deb">debito</span> / <span class="cred">credito</span>, com cupom, loja, observação e valor abaixo. Depois marque “Lançado”.</div>';
+  const L = D.lojas.find(l => l.loja_id === S.loja);
+  L.alertas.filter(a => a.tipo === 'sem_devolucao').forEach(a => {
+    h += `<div class="card alert"><div class="top"><div class="flow">Venda <b>${a.venda.cupom}</b> paga com troca · ${brl(a.venda.total)}</div><span class="tag warn">investigar</span></div><div class="obs">${esc(a.motivo)}. Pode ser troca lançada em duplicidade ou devolução feita em outra loja.</div></div>`;
+  });
+  L.trocas.forEach(t => {
+    const ids = t.lancamentos.map(x => x.id), feito = ids.length && ids.every(i => S.feitos[i]);
+    const dev = t.devolucoes.map(d => `<b>${d.cupom}</b>${d.data !== t.venda.data ? ' (' + fdata(d.data) + ')' : ''}`).join(' + ');
+    const tag = t.mesma_marca ? '<span class="tag ok">mesma marca · nada a lançar</span>' : feito ? '<span class="tag info">lançado</span>' : t.ambiguo ? '<span class="tag warn">confira o par</span>' : '<span class="tag warn">a lançar</span>';
+    h += `<div class="card ${t.mesma_marca ? 'same' : feito ? 'done' : ''}"><div class="top"><div class="flow">Devolução ${dev} → venda <b>${t.venda.cupom}</b> · ${brl(t.venda.total)}</div>${tag}</div>`;
+    if (t.lancamentos.length) {
+      h += `<table><tr><th>Lançamento</th><th>Marca</th><th class="num hide-sm">Parte da troca</th><th class="num">Valor líquido</th><th></th></tr>` +
+        t.lancamentos.map(x => `<tr><td class="${x.tipo === 'debito' ? 'deb' : 'cred'}">${x.tipo === 'debito' ? 'Débito' : 'Crédito'}</td><td>${x.expositor_id} · ${esc(x.expositor)}<div style="color:var(--dim);font-size:12px">cupom ${x.cupom}</div></td><td class="num hide-sm">${brl(x.bruto)}</td><td class="num">${brl(x.valor)}</td><td><button class="copy" onclick="copiar(this,'${num(x.valor)}')">copiar</button></td></tr>`).join('') + '</table>';
+      h += `<div class="obs">Observação: ${esc(t.lancamentos[0].observacao)} <button class="copy" onclick="copiar(this,${esc(JSON.stringify(t.lancamentos[0].observacao))})">copiar</button>${t.ambiguo ? '<br><span style="color:var(--warn)">Há mais de uma devolução com esse valor — confirme o cupom de devolução antes de lançar.</span>' : ''}${Math.abs(t.diferenca) >= 0.01 ? `<br>Diferença de arredondamento entre devolução e venda: ${brl(t.diferenca)}` : ''}</div>`;
+      h += `<div class="foot">${feito ? `<button onclick='desmarcar(${JSON.stringify(ids)})'>Desfazer</button>` : `<button class="btn-primary" onclick='marcar("${t.id}",${JSON.stringify(ids)})'>✓ Lançado</button>`}</div>`;
+    }
+    h += '</div>';
+  });
+  const abertos = L.alertas.filter(a => a.tipo === 'vale_aberto');
+  if (abertos.length) h += `<div class="legend">Vale em aberto (devolvido hoje, ainda sem compra): ${abertos.map(a => `<b>${a.venda.cupom}</b> ${brl(-a.venda.total)}`).join(' · ')}</div>`;
+  if (!L.trocas.length && !L.alertas.length) h += '<div class="empty">Nada nesta loja.</div>';
+  main.innerHTML = h;
+}
+carregar();
+</script>
+</body>
+</html>
