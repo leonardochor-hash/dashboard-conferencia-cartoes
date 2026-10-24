@@ -9,6 +9,10 @@
       "use": "@vercel/static"
     },
     {
+      "src": "repasse.html",
+      "use": "@vercel/static"
+    },
+    {
       "src": "api/conferir.py",
       "use": "@vercel/python"
     },
@@ -22,6 +26,13 @@
     },
     {
       "src": "api/trocas.py",
+      "use": "@vercel/python",
+      "config": {
+        "maxDuration": 60
+      }
+    },
+    {
+      "src": "api/repasse.py",
       "use": "@vercel/python",
       "config": {
         "maxDuration": 60
@@ -48,6 +59,14 @@
     {
       "src": "/trocas",
       "dest": "/trocas.html"
+    },
+    {
+      "src": "/api/repasse",
+      "dest": "/api/repasse.py"
+    },
+    {
+      "src": "/repasse",
+      "dest": "/repasse.html"
     },
     {
       "src": "/",

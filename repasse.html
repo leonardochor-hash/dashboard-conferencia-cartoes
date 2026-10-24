@@ -1,0 +1,126 @@
+<!DOCTYPE html>
+<html lang="pt-BR">
+<head>
+<meta charset="UTF-8">
+<meta name="viewport" content="width=device-width, initial-scale=1.0">
+<title>Vendas x Repasse</title>
+<link href="https://fonts.googleapis.com/css2?family=Fraunces:opsz,wght@9..144,500;9..144,600&family=JetBrains+Mono:wght@400;500&family=Inter:wght@400;500;600&display=swap" rel="stylesheet">
+<style>
+:root{--bg:#0f0f10;--surface:#1a1a1c;--border:#2a2a2e;--text:#ededee;--muted:#8a8a90;--dim:#5a5a5f;--accent:#d4a574;--ok:#4ade80;--warn:#facc15;--bad:#f87171;--info:#60a5fa;--serif:'Fraunces',Georgia,serif;--sans:'Inter',system-ui,sans-serif;--mono:'JetBrains Mono',monospace}
+*{box-sizing:border-box}body{margin:0;background:var(--bg);color:var(--text);font-family:var(--sans);font-size:14px}
+header{display:flex;justify-content:space-between;align-items:center;gap:12px;flex-wrap:wrap;padding:18px 28px;border-bottom:1px solid var(--border)}
+h1{font-family:var(--serif);font-weight:600;font-size:24px;margin:0}.sub{color:var(--muted);font-size:13px;margin-top:4px}
+a.btn,button,input,select{background:var(--surface);color:var(--text);border:1px solid var(--border);border-radius:8px;padding:8px 12px;font:inherit;text-decoration:none}
+button{cursor:pointer}.btn-primary{background:var(--accent);color:#1a1209;border-color:var(--accent);font-weight:600}button:disabled{opacity:.5}
+input[type=date]{color-scheme:dark}
+main{padding:20px 28px}
+.periodos{display:flex;gap:14px;flex-wrap:wrap;align-items:flex-end;background:var(--surface);border:1px solid var(--border);border-radius:12px;padding:14px 16px;margin-bottom:16px}
+.periodos fieldset{border:none;margin:0;padding:0;display:flex;gap:6px;align-items:center}
+.periodos legend{font-size:11px;text-transform:uppercase;letter-spacing:.05em;color:var(--muted);margin-bottom:6px;padding:0}
+.stats{display:grid;grid-template-columns:repeat(auto-fit,minmax(170px,1fr));gap:10px;margin-bottom:16px}
+.stat{background:var(--surface);border:1px solid var(--border);border-radius:10px;padding:12px 14px}.stat .l{font-size:11px;color:var(--muted);text-transform:uppercase;letter-spacing:.04em}.stat .v{font-family:var(--mono);font-size:19px;margin-top:4px}
+.filtros{display:flex;gap:10px;flex-wrap:wrap;align-items:center;margin-bottom:12px}
+.filtros label{display:flex;gap:6px;align-items:center;color:var(--muted);font-size:13px}
+.wrap{overflow-x:auto;border:1px solid var(--border);border-radius:12px}
+table{width:100%;border-collapse:collapse;min-width:900px}
+th,td{padding:9px 10px;border-bottom:1px solid var(--border);text-align:left;white-space:nowrap}
+th{font-size:11px;text-transform:uppercase;letter-spacing:.04em;color:var(--dim);font-weight:500;cursor:pointer;position:sticky;top:0;background:var(--bg)}
+th.num,td.num{text-align:right;font-family:var(--mono)}td.num{font-size:13px}
+tr.tot td{font-weight:600;border-top:2px solid var(--border);background:var(--surface)}
+.pos{color:var(--warn)}.neg{color:var(--bad)}.zero{color:var(--ok)}
+.small{color:var(--dim);font-size:11px}
+.aviso{border:1px solid var(--warn);color:var(--warn);border-radius:8px;padding:10px 12px;margin-bottom:12px;font-size:13px}
+.empty{color:var(--muted);text-align:center;padding:50px 10px}
+h2{font-family:var(--serif);font-weight:500;font-size:18px;margin:26px 0 10px}
+@media(max-width:640px){header,main{padding:14px 16px}}
+</style>
+</head>
+<body>
+<header>
+  <div><h1>Vendas x Repasse</h1><div class="sub" id="sub">Venda líquida pela comissão do contrato de cada loja · repasses Zoop pagos</div></div>
+  <div style="display:flex;gap:8px;flex-wrap:wrap"><a class="btn" href="/">← Cartões</a><a class="btn" href="/trocas">⇄ Trocas</a></div>
+</header>
+<main>
+  <div class="periodos">
+    <fieldset><div><legend>Período de venda</legend><input type="date" id="vi"> <span class="small">até</span> <input type="date" id="vf"></div></fieldset>
+    <fieldset><div><legend>Período de repasse</legend><input type="date" id="ri"> <span class="small">até</span> <input type="date" id="rf"></div></fieldset>
+    <button class="btn-primary" id="btn" onclick="carregar()">↻ Comparar</button>
+  </div>
+  <div id="out"><div class="empty">Escolha os períodos e clique em “Comparar”. Máximo de 62 dias por período.</div></div>
+</main>
+<script>
+if (sessionStorage.getItem('conf_cartoes_auth') !== 'ok') location.href = '/';
+const S = { d: null, sort: 'diferenca', dir: -1, so: true, tol: 1, q: '', loja: 'all' };
+const brl = v => (v < 0 ? '−' : '') + 'R$ ' + Math.abs(Number(v)).toLocaleString('pt-BR', { minimumFractionDigits: 2, maximumFractionDigits: 2 });
+const esc = s => String(s ?? '').replace(/[&<>"]/g, c => ({ '&': '&amp;', '<': '&lt;', '>': '&gt;', '"': '&quot;' }[c]));
+const fd = iso => iso.split('-').reverse().join('/');
+const LOJAS = { 1: 'RS antigo', 3: 'Barra', 4: 'Norte', 5: 'Rio Sul' };
+(function () {
+  const h = new Date(), a = new Date(h.getFullYear(), h.getMonth() - 1, 1), b = new Date(h.getFullYear(), h.getMonth(), 0);
+  const iso = d => d.toLocaleDateString('en-CA');
+  vi.value = iso(a); vf.value = iso(b); ri.value = iso(a); rf.value = iso(b);
+})();
+async function carregar() {
+  const out = document.getElementById('out'), btn = document.getElementById('btn');
+  btn.disabled = true; out.innerHTML = '<div class="empty">Buscando vendas, contratos e repasses no LivePDV… (pode levar até 1 minuto)</div>';
+  try {
+    const q = new URLSearchParams({ venda_ini: vi.value, venda_fim: vf.value, repasse_ini: ri.value, repasse_fim: rf.value });
+    const r = await fetch('/api/repasse?' + q);
+    const d = await r.json().catch(() => null);
+    if (!r.ok || !d) throw new Error((d && d.error) || 'HTTP ' + r.status);
+    S.d = d;
+    document.getElementById('sub').textContent = `Venda ${fd(d.venda[0])}–${fd(d.venda[1])} (${d.linhas_venda} linhas) · repasse ${fd(d.repasse[0])}–${fd(d.repasse[1])} (${d.qtd_repasses} transferências)`;
+    render();
+  } catch (e) { out.innerHTML = `<div class="empty"><div style="color:var(--bad);font-size:16px;margin-bottom:6px">Erro</div>${esc(e.message)}</div>`; }
+  finally { btn.disabled = false; }
+}
+function filtradas() {
+  let L = S.d.marcas.slice();
+  if (S.so) L = L.filter(x => Math.abs(x.diferenca) > S.tol);
+  if (S.q) { const q = S.q.toLowerCase(); L = L.filter(x => x.marca.toLowerCase().includes(q) || String(x.expositor_id).includes(q)); }
+  if (S.loja !== 'all') L = L.filter(x => x.lojas.includes(+S.loja));
+  L.sort((a, b) => { const va = a[S.sort], vb = b[S.sort]; return (typeof va === 'string' ? va.localeCompare(vb) : (S.sort === 'diferenca' ? Math.abs(va) - Math.abs(vb) : va - vb)) * S.dir; });
+  return L;
+}
+function ordena(c) { if (S.sort === c) S.dir *= -1; else { S.sort = c; S.dir = c === 'marca' ? 1 : -1; } render(); }
+function cls(v) { return Math.abs(v) <= S.tol ? 'zero' : v > 0 ? 'pos' : 'neg'; }
+function render() {
+  const D = S.d, L = filtradas(), all = D.marcas;
+  const soma = (arr, k) => arr.reduce((a, x) => a + x[k], 0);
+  const comDif = all.filter(x => Math.abs(x.diferenca) > S.tol);
+  let h = (D.avisos || []).map(a => `<div class="aviso">⚠ ${esc(a)}</div>`).join('');
+  h += `<div class="stats">
+    <div class="stat"><div class="l">Venda bruta</div><div class="v">${brl(soma(all, 'bruta'))}</div></div>
+    <div class="stat"><div class="l">Venda líquida</div><div class="v">${brl(soma(all, 'liquida'))}</div></div>
+    <div class="stat"><div class="l">Repasse pago</div><div class="v">${brl(soma(all, 'repasse'))}</div></div>
+    <div class="stat"><div class="l">Diferença total</div><div class="v ${cls(soma(all, 'diferenca'))}">${brl(soma(all, 'diferenca'))}</div></div>
+    <div class="stat"><div class="l">Marcas com diferença</div><div class="v ${comDif.length ? 'pos' : 'zero'}">${comDif.length} / ${all.length}</div></div>
+  </div>`;
+  h += `<div class="filtros">
+    <label><input type="checkbox" ${S.so ? 'checked' : ''} onchange="S.so=this.checked;render()"> Só quem tem diferença acima de</label>
+    <input type="number" step="0.5" min="0" value="${S.tol}" style="width:80px" onchange="S.tol=+this.value||0;render()">
+    <select onchange="S.loja=this.value;render()"><option value="all">Todas as lojas</option>${[...new Set(all.flatMap(x => x.lojas))].sort().map(l => `<option value="${l}" ${S.loja == l ? 'selected' : ''}>${l} · ${LOJAS[l] || ''}</option>`).join('')}</select>
+    <input placeholder="Buscar marca…" value="${esc(S.q)}" oninput="S.q=this.value;render();this.focus();this.setSelectionRange(this.value.length,this.value.length)" id="busca">
+    <button onclick="csv()">⬇ CSV</button>
+    <span class="small">${L.length} marca(s) · positivo = repassou a mais · negativo = repassou a menos</span>
+  </div>`;
+  const th = (c, t, n) => `<th class="${n ? 'num' : ''}" onclick="ordena('${c}')">${t}${S.sort === c ? (S.dir > 0 ? ' ▲' : ' ▼') : ''}</th>`;
+  h += `<div class="wrap"><table><thead><tr>${th('marca', 'Marca')}<th>Lojas</th>${th('bruta', 'Venda bruta', 1)}<th class="num">Comissão</th>${th('liquida', 'Venda líquida', 1)}${th('repasse', 'Repasse pago', 1)}${th('repasse_pendente', 'Pendente', 1)}${th('diferenca', 'Diferença', 1)}</tr></thead><tbody>`;
+  h += L.map(x => `<tr><td>${x.expositor_id} · ${esc(x.marca)}${x.nome_zoop ? '' : '<div class="small" style="color:var(--bad)">sem repasse com esse nome na Zoop</div>'}</td><td>${x.lojas.map(l => LOJAS[l] || l).join(', ')}</td><td class="num">${brl(x.bruta)}</td><td class="num" title="${esc(x.origem_comissao.join('; '))}">${x.comissao.map(c => c.toFixed(1) + '%').join(' / ')}${x.origem_comissao.some(o => !o.startsWith('contrato')) ? ' <span style="color:var(--warn)">*</span>' : ''}</td><td class="num">${brl(x.liquida)}</td><td class="num">${brl(x.repasse)}<div class="small">${x.qtd_repasses} transf.</div></td><td class="num">${x.repasse_pendente ? brl(x.repasse_pendente) : '—'}</td><td class="num ${cls(x.diferenca)}"><b>${brl(x.diferenca)}</b></td></tr>`).join('');
+  h += `<tr class="tot"><td>Total (filtro)</td><td></td><td class="num">${brl(soma(L, 'bruta'))}</td><td></td><td class="num">${brl(soma(L, 'liquida'))}</td><td class="num">${brl(soma(L, 'repasse'))}</td><td class="num">${brl(soma(L, 'repasse_pendente'))}</td><td class="num ${cls(soma(L, 'diferenca'))}">${brl(soma(L, 'diferenca'))}</td></tr></tbody></table></div>`;
+  h += `<div class="small" style="margin-top:6px"><span style="color:var(--warn)">*</span> comissão sem contrato da loja na data (veio do cadastro ou padrão 23%) — passe o mouse para ver.</div>`;
+  if (D.so_repasse.length) {
+    h += `<h2>Repasses sem venda no período (${D.so_repasse.length})</h2><div class="small" style="margin-bottom:8px">Marca recebeu repasse mas não teve venda no período escolhido, ou o nome na Zoop é diferente do LivePDV.</div><div class="wrap"><table style="min-width:500px"><thead><tr><th>Marca (nome na Zoop)</th><th class="num">Repasse pago</th><th class="num">Pendente</th><th class="num">Transf.</th></tr></thead><tbody>` +
+      D.so_repasse.map(x => `<tr><td>${esc(x.marca)}</td><td class="num">${brl(x.repasse)}</td><td class="num">${x.repasse_pendente ? brl(x.repasse_pendente) : '—'}</td><td class="num">${x.qtd_repasses}</td></tr>`).join('') + '</tbody></table></div>';
+  }
+  document.getElementById('out').innerHTML = h;
+}
+function csv() {
+  const L = filtradas(), n = v => String(v).replace('.', ',');
+  const rows = [['codigo', 'marca', 'lojas', 'venda_bruta', 'comissao', 'venda_liquida', 'repasse_pago', 'repasse_pendente', 'diferenca']].concat(L.map(x => [x.expositor_id, x.marca, x.lojas.join(' '), n(x.bruta), x.comissao.join(' / '), n(x.liquida), n(x.repasse), n(x.repasse_pendente), n(x.diferenca)]));
+  const blob = new Blob(['﻿' + rows.map(r => r.map(c => `"${String(c).replace(/"/g, '""')}"`).join(';')).join('\n')], { type: 'text/csv' });
+  const a = document.createElement('a'); a.href = URL.createObjectURL(blob); a.download = `vendas_x_repasse_${S.d.venda[0]}_${S.d.venda[1]}.csv`; a.click();
+}
+</script>
+</body>
+</html>
