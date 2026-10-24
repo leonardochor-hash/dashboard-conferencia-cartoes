@@ -332,7 +332,7 @@ def _parse_adendo(html):
         except ValueError:
             continue
         out.append({"inicio": d(tds[1]), "fim": d(tds[2]) or "9999-12-31", "comissao": com,
-                    "loja_id": int(tds[4]) if tds[4].isdigit() else None, "ativo": tds[5].strip().lower().startswith("s")})
+                    "loja_id": (int(re.search(r"\d+", tds[4]).group(0)) if re.search(r"\d+", tds[4]) else None), "ativo": tds[5].strip().lower().startswith("s")})
     return out
 
 
