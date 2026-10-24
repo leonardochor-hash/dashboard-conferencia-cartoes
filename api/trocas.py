@@ -356,6 +356,15 @@ def montar_trocas(linhas, dia_iso):
                          "bruto": abs(bruto), "valor": liq,
                          "cupom": v["cupom"] if tipo == "credito" else ds[0]["cupom"],
                          "observacao": f"Ajuste troca: devolucao {'+'.join(d['cupom'] for d in ds)} -> venda {v['cupom']}"})
+        # fecha o saldo em zero: centavo de arredondamento vai para o maior lancamento do lado maior
+        deb = _r2(sum(x["valor"] for x in lanc if x["tipo"] == "debito"))
+        cre = _r2(sum(x["valor"] for x in lanc if x["tipo"] == "credito"))
+        dif = _r2(cre - deb)
+        if lanc and 0 < abs(dif) <= 0.10:
+            lado = "credito" if dif > 0 else "debito"
+            alvo = max((x for x in lanc if x["tipo"] == lado), key=lambda x: x["valor"])
+            alvo["valor"] = _r2(alvo["valor"] - abs(dif))
+            alvo["ajuste_centavos"] = -abs(dif)
         lanc.sort(key=lambda x: (x["tipo"] != "debito", -x["valor"]))
         L = lojas.setdefault(v["loja_id"], {"loja_id": v["loja_id"], "nome": v["loja_nome"], "trocas": [], "alertas": []})
         L["trocas"].append({
