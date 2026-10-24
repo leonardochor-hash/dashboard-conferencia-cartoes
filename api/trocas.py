@@ -385,25 +385,130 @@ def montar_trocas(linhas, dia_iso):
     return sorted(lojas.values(), key=lambda l: l["loja_id"])
 
 
+# ==================== SELLERS ZOOP (tela Relatorio Saldo Zoop) ====================
+
+import unicodedata
+
+SALDO_URL = "/zoop/relatorio-saldo-expositor"
+AJUSTE_URL = "/zoop/relatorio-saldo-expositor/ajuste-debito-credito-expositor"
+OBSERVACAO = "ajuste troca sistema"
+
+
+def _norm(t):
+    t = unicodedata.normalize("NFKD", str(t or "")).encode("ascii", "ignore").decode().lower()
+    return re.sub(r"[^a-z0-9]+", " ", t).strip()
+
+
+def _parse_saldo(html):
+    soup = BeautifulSoup(html, "html.parser")
+    out = []
+    for tr in soup.select("table tbody tr"):
+        tds = [td.get_text(" ", strip=True) for td in tr.find_all("td")]
+        if len(tds) < 5 or not re.fullmatch(r"[0-9a-f]{32}", tds[1] or ""):
+            continue
+        out.append({"seller_id": tds[1], "marketplace_id": tds[2], "nome": tds[3], "fantasia": tds[4]})
+    return out
+
+
+def carregar_sellers(client):
+    """Le todas as paginas da tela de saldo (lista de marcas cadastradas na Zoop)."""
+    sellers, vistos = [], set()
+    for page in range(1, 40):
+        r = client.session.get(BASE_URL + SALDO_URL, params={"page": page}, timeout=30)
+        r.raise_for_status()
+        novos = [x for x in _parse_saldo(r.text) if (x["seller_id"], x["marketplace_id"]) not in vistos]
+        if not novos:
+            break
+        for x in novos:
+            vistos.add((x["seller_id"], x["marketplace_id"]))
+        sellers += novos
+    return sellers
+
+
+def casar_seller(expositor, sellers):
+    """Acha a marca na Zoop pelo nome. Retorna (seller|None, status, opcoes)."""
+    alvo = _norm(expositor)
+    exatos = [s for s in sellers if _norm(s["fantasia"]) == alvo]
+    if not exatos:
+        exatos = [s for s in sellers if _norm(s["fantasia"]) and (alvo.startswith(_norm(s["fantasia"]) + " ") or _norm(s["fantasia"]).startswith(alvo + " "))]
+    if len(exatos) == 1:
+        return exatos[0], "ok", exatos
+    if not exatos:
+        return None, "sem_cadastro", []
+    return None, "ambiguo", exatos
+
+
+def anexar_sellers(lojas, sellers):
+    for L in lojas:
+        for t in L["trocas"]:
+            for x in t["lancamentos"]:
+                s, st, ops = casar_seller(x["expositor"], sellers)
+                x["seller_status"] = st
+                x["seller"] = s
+                x["seller_opcoes"] = [{"fantasia": o["fantasia"], "nome": o["nome"], "seller_id": o["seller_id"][:6]} for o in ops][:4]
+
+
+def _csrf(client):
+    r = client.session.get(BASE_URL + SALDO_URL, timeout=30)
+    r.raise_for_status()
+    soup = BeautifulSoup(r.text, "html.parser")
+    m = soup.find("meta", {"name": "csrf-token"})
+    if m and m.get("content"):
+        return m["content"]
+    i = soup.find("input", {"name": "_csrf"})
+    if i:
+        return i.get("value", "")
+    raise RuntimeError("csrf da tela de saldo nao encontrado")
+
+
+def lancar(client, loja_id, x, csrf):
+    """Faz o mesmo POST do botao Concluir do formulario debito/credito."""
+    payload = {
+        "_csrf": csrf,
+        "tipo": x["tipo"],
+        "marketplaceId": x["seller"]["marketplace_id"],
+        "sellerId": x["seller"]["seller_id"],
+        "cupom": x["cupom"],
+        "loja": str(loja_id),
+        "observacao": OBSERVACAO,
+        "transferencia": f"{x['valor']:.2f}".replace(".", ","),
+    }
+    r = client.session.post(BASE_URL + AJUSTE_URL, data=payload, timeout=30,
+                            headers={"X-Requested-With": "XMLHttpRequest", "X-CSRF-Token": csrf,
+                                     "Referer": BASE_URL + SALDO_URL})
+    try:
+        body = r.json()
+    except ValueError:
+        body = {"raw": r.text[:300]}
+    ok = r.status_code < 400 and not (isinstance(body, dict) and (body.get("error") or str(body.get("status", "")).lower() in ("error", "erro", "false")))
+    return {"ok": ok, "http": r.status_code, "resposta": body}
+
+
 # ==================== HANDLER VERCEL ====================
 
 class handler(BaseHTTPRequestHandler):
     def do_GET(self):
-        self._handle()
+        self._handle(None)
 
     def do_POST(self):
-        self._handle()
+        n = int(self.headers.get("Content-Length") or 0)
+        try:
+            body = json.loads(self.rfile.read(n) or b"{}")
+        except ValueError:
+            body = {}
+        self._handle(body)
 
-    def _handle(self):
+    def _handle(self, body):
         try:
             if not USUARIO or not SENHA:
                 return self._json(500, {"error": "Credenciais nao configuradas"})
             from urllib.parse import urlparse, parse_qs
             from datetime import timedelta
             qs = parse_qs(urlparse(self.path).query)
+            dstr = (body or {}).get("data") or (qs.get("data") or [None])[0]
             try:
-                dia = date.fromisoformat(qs["data"][0])
-            except (KeyError, IndexError, ValueError):
+                dia = date.fromisoformat(dstr)
+            except (TypeError, ValueError):
                 dia = (datetime.now() - timedelta(days=1)).date()
             ini = dia - timedelta(days=JANELA_DIAS)
             client = MoomboxClient()
@@ -415,6 +520,31 @@ class handler(BaseHTTPRequestHandler):
             }
             linhas = client._baixar_grid(url, params, "_togd9a55727", _parse_trocas, "Trocas")
             lojas = montar_trocas(linhas, dia.isoformat())
+            sellers = carregar_sellers(client)
+            anexar_sellers(lojas, sellers)
+
+            if body is not None and body.get("ids"):
+                # LANCAR: so os ids pedidos, recalculados aqui no servidor (nao confia no navegador)
+                ids = set(body["ids"])
+                dry = bool(body.get("dry_run"))
+                csrf = None if dry else _csrf(client)
+                resultados = []
+                for L in lojas:
+                    for t in L["trocas"]:
+                        for x in t["lancamentos"]:
+                            if x["id"] not in ids:
+                                continue
+                            item = {"id": x["id"], "tipo": x["tipo"], "expositor": x["expositor"], "valor": x["valor"], "cupom": x["cupom"]}
+                            if x["seller_status"] != "ok":
+                                item.update(ok=False, motivo=f"marca {x['seller_status']} na Zoop")
+                            elif dry:
+                                item.update(ok=True, simulado=True, seller=x["seller"]["fantasia"])
+                            else:
+                                item.update(lancar(client, L["loja_id"], x, csrf))
+                                log(f"LANCAMENTO troca {item}")
+                            resultados.append(item)
+                return self._json(200, {"data_referencia": dia.isoformat(), "resultados": resultados})
+
             return self._json(200, {
                 "data_referencia": dia.isoformat(),
                 "janela": [ini.isoformat(), dia.isoformat()],
