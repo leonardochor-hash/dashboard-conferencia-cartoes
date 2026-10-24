@@ -46,7 +46,7 @@ h2{font-family:var(--serif);font-weight:500;font-size:18px;margin:26px 0 10px}
     <fieldset><div><legend>Período de repasse</legend><input type="date" id="ri"> <span class="small">até</span> <input type="date" id="rf"></div></fieldset>
     <button class="btn-primary" id="btn" onclick="carregar()">↻ Comparar</button>
   </div>
-  <div id="out"><div class="empty">Escolha os períodos e clique em “Comparar”. Períodos longos demoram mais (o LivePDV é lento).</div></div>
+  <div id="out"><div class="empty">Carregando ontem (venda) × hoje (repasse)… Ao mudar a data de venda, o repasse é sugerido como o dia seguinte.</div></div>
 </main>
 <script>
 if (sessionStorage.getItem('conf_cartoes_auth') !== 'ok') location.href = '/';
@@ -55,10 +55,14 @@ const brl = v => (v < 0 ? '−' : '') + 'R$ ' + Math.abs(Number(v)).toLocaleStri
 const esc = s => String(s ?? '').replace(/[&<>"]/g, c => ({ '&': '&amp;', '<': '&lt;', '>': '&gt;', '"': '&quot;' }[c]));
 const fd = iso => iso.split('-').reverse().join('/');
 const LOJAS = { 1: 'RS antigo', 3: 'Barra', 4: 'Norte', 5: 'Rio Sul' };
+const isoD = d => d.toLocaleDateString('en-CA');
+const mais1 = iso => { const d = new Date(iso + 'T12:00:00'); d.setDate(d.getDate() + 1); return isoD(d); };
+function sugereRepasse() { if (vf.value < vi.value) vf.value = vi.value; ri.value = mais1(vi.value); rf.value = mais1(vf.value); }
 (function () {
-  const h = new Date(), a = new Date(h.getFullYear(), h.getMonth() - 1, 1), b = new Date(h.getFullYear(), h.getMonth(), 0);
-  const iso = d => d.toLocaleDateString('en-CA');
-  vi.value = iso(a); vf.value = iso(b); ri.value = iso(a); rf.value = iso(b);
+  const o = new Date(); o.setDate(o.getDate() - 1);
+  vi.value = vf.value = isoD(o); sugereRepasse();
+  vi.addEventListener('change', () => { vf.value = vi.value; sugereRepasse(); });
+  vf.addEventListener('change', sugereRepasse);
 })();
 const norm = t => String(t || '').normalize('NFKD').replace(/[̀-ͯ]/g, '').toLowerCase().replace(/[^a-z0-9]+/g, ' ').trim();
 function chunks(ini, fim, dias) {
@@ -173,6 +177,7 @@ function csv() {
   const blob = new Blob(['﻿' + rows.map(r => r.map(c => `"${String(c).replace(/"/g, '""')}"`).join(';')).join('\n')], { type: 'text/csv' });
   const a = document.createElement('a'); a.href = URL.createObjectURL(blob); a.download = `vendas_x_repasse_${S.d.venda[0]}_${S.d.venda[1]}.csv`; a.click();
 }
+carregar();
 </script>
 </body>
 </html>
