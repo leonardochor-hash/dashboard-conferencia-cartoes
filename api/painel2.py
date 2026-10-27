@@ -858,6 +858,87 @@ def cruzar(vendas_livepdv, transacoes_zoop):
     }
 
 
+
+# ==================== ALERTA: cartões do mesmo cupom com horários distantes ====================
+
+LIMITE_ALERTA_MIN = 5  # minutos
+
+
+def _hora_seg(h):
+    """'21:06:03' -> segundos do dia (None se não der pra ler)."""
+    m = re.match(r"^\s*(\d{1,2}):(\d{2})(?::(\d{2}))?", str(h or ""))
+    if not m:
+        return None
+    return int(m.group(1)) * 3600 + int(m.group(2)) * 60 + int(m.group(3) or 0)
+
+
+def alertas_horario(vendas_livepdv, transacoes_zoop, resultado, limite_min=LIMITE_ALERTA_MIN):
+    """
+    Alerta quando um MESMO cupom tem 2+ cartões (transações Zoop distintas)
+    cujos horários na maquininha diferem mais de `limite_min` minutos.
+    Considera os cartões já lançados no cupom (hashes da célula Cod Autoriza)
+    e os cartões que o sistema SUGERE colocar nele (match/cod_errado/
+    codigo_duplicado) — já descontando o código que a sugestão vai remover.
+    Só informa; não muda nenhuma correção.
+    """
+    from collections import defaultdict
+    zidx = {(z["loja_id"], z["zoop_id"]): z for z in transacoes_zoop}
+    cupons = defaultdict(dict)  # (loja, cupom) -> {zoop_id: origem}
+
+    for v in vendas_livepdv:
+        loja, cupom = v["loja_id"], v["cupom"]
+        hashes = re.findall(r"[a-f0-9]{32}", v.get("cod_txt") or "")
+        if v.get("cod_aut"):
+            hashes.append(v["cod_aut"])
+        for h in hashes:
+            if (loja, h) in zidx:
+                cupons[(loja, cupom)].setdefault(h, "lançado")
+
+    for p in resultado.get("problemas", []):
+        if p.get("tipo") not in ("match", "cod_errado", "codigo_duplicado") or not p.get("cupom"):
+            continue
+        k = (p["loja_id"], p["cupom"])
+        alvo = p.get("cod_certo") or (p.get("zoop_id") if p["tipo"] == "match" else None)
+        if not alvo:
+            continue
+        sai = p.get("cod_errado")
+        if sai and p.get("subtipo") != "mesmo_cod_no_cupom":
+            cupons[k].pop(sai, None)
+        cupons[k].setdefault(alvo, "sugerido")
+
+    alertas = []
+    limite = limite_min * 60
+    for (loja, cupom), cards in cupons.items():
+        lst = []
+        for zid, origem in cards.items():
+            z = zidx.get((loja, zid))
+            s = _hora_seg(z.get("hora")) if z else None
+            if s is None:
+                continue
+            lst.append({"zoop_id": zid, "hora": z.get("hora", ""), "valor": z["valor"],
+                        "bandeira": z.get("bandeira", ""), "tipo_pagamento": z.get("tipo_pagamento", ""),
+                        "origem": origem, "_s": s})
+        if len(lst) < 2:
+            continue
+        lst.sort(key=lambda c: c["_s"])
+        span = lst[-1]["_s"] - lst[0]["_s"]
+        if span <= limite:
+            continue
+        for c in lst:
+            c.pop("_s")
+        alertas.append({
+            "id": _make_id("alerta_hora", loja, cupom),
+            "tipo": "alerta_horario",
+            "loja_id": loja,
+            "cupom": cupom,
+            "diferenca_min": round(span / 60),
+            "limite_min": limite_min,
+            "cartoes": lst,
+        })
+    alertas.sort(key=lambda a: (a["loja_id"], -a["diferenca_min"]))
+    return alertas
+
+
 # ==================== PAINEL 2 (visão lado a lado por loja) ====================
 
 def montar_painel(vendas_livepdv, transacoes_zoop, resultado):
@@ -1007,6 +1088,27 @@ def montar_painel(vendas_livepdv, transacoes_zoop, resultado):
     return saida
 
 
+def anexar_alertas(lojas, alertas):
+    """Coloca os alertas de horário em cada loja, com os números P/Z do painel."""
+    for L in lojas:
+        zn = {z["zoop_id"]: z["n"] for z in L["zoop"]}
+        pn = {}
+        for it in L["pdv"]:
+            pn.setdefault(it["cupom"], []).append(it["n"])
+        L["alertas"] = []
+        for a in alertas:
+            if a["loja_id"] != L["loja_id"]:
+                continue
+            a = dict(a, p=pn.get(a["cupom"], []),
+                     cartoes=[dict(c, n=zn.get(c["zoop_id"])) for c in a["cartoes"]])
+            L["alertas"].append(a)
+            for it in L["pdv"]:
+                if it["cupom"] == a["cupom"]:
+                    it["alerta_horario"] = a["diferenca_min"]
+        L["resumo"]["alertas"] = len(L["alertas"])
+    return lojas
+
+
 # ==================== HANDLER VERCEL ====================
 
 class handler(BaseHTTPRequestHandler):
@@ -1031,7 +1133,8 @@ class handler(BaseHTTPRequestHandler):
                 "data_referencia": data_ref.isoformat(),
                 "gerado_em": datetime.now().isoformat(),
                 "totais": {"vendas_livepdv": len(vendas), "transacoes_zoop": len(zoop)},
-                "lojas": montar_painel(vendas, zoop, resultado),
+                "lojas": anexar_alertas(montar_painel(vendas, zoop, resultado),
+                                        alertas_horario(vendas, zoop, resultado)),
                 "avisos": client.avisos,
             })
         except Exception as e:
