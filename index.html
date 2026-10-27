@@ -1245,6 +1245,7 @@ function v2Bloco(L, p, a) {
   const zdesc = n => { const z = zBy(n); return z ? `${z.hora||''} · ${esc(z.bandeira||'')} · ${tipoZ(z.tipo)}` : ''; };
   if (v2.aplicados[a.id]) {
     const ap = v2.aplicados[a.id];
+    if (ap.forcado) return `<div class="v2-act"><p class="v2-msg okm">✓ Ligação forçada com <span class="z">${ap.z}</span> (diferença ${brl(ap.dif)}). O valor no PDV não foi alterado. <a href="#" style="color:var(--text-muted);text-decoration:underline" onclick="v2Desfazer('${a.id}');return false">desfazer</a></p></div>`;
     return `<div class="v2-act"><p class="v2-msg okm">✓ Ligado a <span class="z">${ap.z}</span>. Clique em "Conferir agora" para confirmar.</p></div>`;
   }
   let h = '<div class="v2-act">';
@@ -1273,7 +1274,10 @@ function v2Bloco(L, p, a) {
     }[a.motivo] || 'Investigar.';
     h += `<p>${txt}</p>`;
     if (sobras.length && a.motivo !== 'duplicado') h += `<p style="color:var(--text-muted);font-size:12px">Cartões sobrando nesta loja: ${sobras.map(z => '<span class="z">'+z.n+'</span> '+brl(z.valor)).join(' · ')}</p>`;
-    if (a.motivo !== 'duplicado') h += `<div class="v2-btns"><button class="btn" onclick="v2Ligar('${p.n}')">Ligar a um cartão</button></div>`;
+    if (a.motivo === 'divergencia' && a.z_do_codigo) {
+      const armado = v2.armado === a.id;
+      h += `<div class="v2-btns"><button class="btn v2-btn-ok ${armado?'confirm':''}" onclick="v2Forcar(${L.loja_id},'${p.n}','${a.id}')">${armado ? 'Confirmar: ' + p.n + ' = ' + a.z_do_codigo + ' mesmo com ' + brl(Math.abs(a.valor - a.valor_zoop)) + ' de diferença' : 'Forçar ligação ' + p.n + ' = ' + a.z_do_codigo}</button></div>`;
+    } else if (a.motivo !== 'duplicado') h += `<div class="v2-btns"><button class="btn" onclick="v2Ligar('${p.n}')">Ligar a um cartão</button></div>`;
   }
   return h + '</div>';
 }
@@ -1308,6 +1312,16 @@ function v2Ligado(zn) {
   v2.manual[p.n] = zn; v2.ligando = null; v2.armado = null; renderV2();
   const el = document.getElementById('card-' + p.n); if (el) el.scrollIntoView({block:'center', behavior:'smooth'});
 }
+
+function v2Forcar(lojaId, pn, aid) {
+  const L = (v2.dados.lojas||[]).find(l => l.loja_id === lojaId);
+  const a = L.acoes.find(x => x.id === aid); if (!a) return;
+  if (v2.armado !== aid) { v2.armado = aid; renderV2(); setTimeout(() => { if (v2.armado === aid) { v2.armado = null; renderV2(); } }, 5000); return; }
+  v2.armado = null;
+  v2.aplicados[aid] = { z: a.z_do_codigo, em: new Date().toISOString(), cupom: a.cupom, forcado: true, dif: Math.round(Math.abs(a.valor - a.valor_zoop) * 100) / 100 };
+  v2SaveAplicados(); renderV2(); v2Toast(`${pn} = ${a.z_do_codigo}: ligação forçada (nada foi alterado no LivePDV).`);
+}
+function v2Desfazer(aid) { delete v2.aplicados[aid]; v2SaveAplicados(); renderV2(); }
 
 async function v2Aplicar(lojaId, pn, aid) {
   const L = (v2.dados.lojas||[]).find(l => l.loja_id === lojaId);
