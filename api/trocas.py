@@ -288,6 +288,68 @@ def _r2(x):
     return round(x + 1e-9, 2)
 
 
+def _add_troca(lojas, vs, ds, ambiguo):
+    """Gera os lancamentos (debito de quem devolveu, credito de quem vendeu) para
+    um grupo de N vendas x N devolucoes e anexa na loja."""
+    v0 = vs[0]
+    saldo, nomes, cupom_cred, cupom_deb = {}, {}, {}, {}
+    for d in ds:
+        for m in d["marcas"]:
+            saldo[m["expositor_id"]] = saldo.get(m["expositor_id"], 0.0) + m["valor"]
+            nomes[m["expositor_id"]] = m["expositor"]
+            cupom_deb.setdefault(m["expositor_id"], d["cupom"])
+    for v in vs:
+        for m in v["marcas"]:
+            saldo[m["expositor_id"]] = saldo.get(m["expositor_id"], 0.0) + m["valor"]
+            nomes[m["expositor_id"]] = m["expositor"]
+            cupom_cred.setdefault(m["expositor_id"], v["cupom"])
+    chave_v = "+".join(v["cupom"] for v in vs)
+    chave_d = "+".join(d["cupom"] for d in ds)
+    lanc = []
+    for eid, bruto in saldo.items():
+        bruto = _r2(bruto)
+        if abs(bruto) < 0.01:
+            continue
+        tipo = "credito" if bruto > 0 else "debito"
+        # distribui o liquido da marca pelos cupons reais do lado (varias vendas/devolucoes)
+        lado = vs if tipo == "credito" else ds
+        partes = []
+        resto = abs(bruto)
+        for c in lado:
+            vm = sum(m["valor"] for m in c["marcas"] if m["expositor_id"] == eid)
+            vm = abs(vm)
+            if vm < 0.005 or resto < 0.005:
+                continue
+            q = _r2(min(vm, resto))
+            partes.append((c["cupom"], q))
+            resto = _r2(resto - q)
+        if not partes:
+            partes = [((cupom_cred if tipo == "credito" else cupom_deb).get(eid, (vs if tipo == "credito" else ds)[0]["cupom"]), abs(bruto))]
+        for cupom, parte in partes:
+            lid = hashlib.md5(f"troca|{v0['loja_id']}|{chave_v}|{eid}|{tipo}|{cupom}".encode()).hexdigest()[:12]
+            lanc.append({"id": lid, "tipo": tipo, "expositor_id": eid, "expositor": nomes[eid],
+                         "bruto": parte, "valor": _r2(parte * LIQUIDO), "cupom": cupom,
+                         "observacao": f"Ajuste troca: devolucao {chave_d} -> venda {chave_v}"})
+    # fecha o saldo em zero: centavo de arredondamento vai para o maior lancamento do lado maior
+    deb = _r2(sum(x["valor"] for x in lanc if x["tipo"] == "debito"))
+    cre = _r2(sum(x["valor"] for x in lanc if x["tipo"] == "credito"))
+    dif = _r2(cre - deb)
+    if lanc and 0 < abs(dif) <= 0.10:
+        lado = "credito" if dif > 0 else "debito"
+        alvo = max((x for x in lanc if x["tipo"] == lado), key=lambda x: x["valor"])
+        alvo["valor"] = _r2(alvo["valor"] - abs(dif))
+        alvo["ajuste_centavos"] = -abs(dif)
+    lanc.sort(key=lambda x: (x["tipo"] != "debito", -x["valor"]))
+    venda = dict(v0, cupom=chave_v, total=_r2(sum(v["total"] for v in vs))) if len(vs) > 1 else v0
+    L = lojas.setdefault(v0["loja_id"], {"loja_id": v0["loja_id"], "nome": v0["loja_nome"], "trocas": [], "alertas": []})
+    L["trocas"].append({
+        "id": hashlib.md5(f"troca|{v0['loja_id']}|{chave_v}".encode()).hexdigest()[:12],
+        "venda": venda, "vendas": vs, "devolucoes": ds, "ambiguo": ambiguo,
+        "mesma_marca": not lanc, "lancamentos": lanc,
+        "diferenca": _r2(sum(v["total"] for v in vs) + sum(d["total"] for d in ds)),
+    })
+
+
 def montar_trocas(linhas, dia_iso):
     """Pareia devolucoes x vendas-com-troca por loja e gera os lancamentos do dia."""
     cupons = {}
@@ -338,44 +400,32 @@ def montar_trocas(linhas, dia_iso):
 
     lojas = {}
     for v, ds, ambiguo in pares:
-        saldo = {}
-        nomes = {}
-        for d in ds:
-            for m in d["marcas"]:
-                saldo[m["expositor_id"]] = saldo.get(m["expositor_id"], 0.0) + m["valor"]
-                nomes[m["expositor_id"]] = m["expositor"]
-        for m in v["marcas"]:
-            saldo[m["expositor_id"]] = saldo.get(m["expositor_id"], 0.0) + m["valor"]
-            nomes[m["expositor_id"]] = m["expositor"]
-        lanc = []
-        for eid, bruto in saldo.items():
-            bruto = _r2(bruto)
-            if abs(bruto) < 0.01:
-                continue
-            liq = _r2(abs(bruto) * LIQUIDO)
-            tipo = "credito" if bruto > 0 else "debito"
-            lid = hashlib.md5(f"troca|{v['loja_id']}|{v['cupom']}|{eid}|{tipo}".encode()).hexdigest()[:12]
-            lanc.append({"id": lid, "tipo": tipo, "expositor_id": eid, "expositor": nomes[eid],
-                         "bruto": abs(bruto), "valor": liq,
-                         "cupom": v["cupom"] if tipo == "credito" else ds[0]["cupom"],
-                         "observacao": f"Ajuste troca: devolucao {'+'.join(d['cupom'] for d in ds)} -> venda {v['cupom']}"})
-        # fecha o saldo em zero: centavo de arredondamento vai para o maior lancamento do lado maior
-        deb = _r2(sum(x["valor"] for x in lanc if x["tipo"] == "debito"))
-        cre = _r2(sum(x["valor"] for x in lanc if x["tipo"] == "credito"))
-        dif = _r2(cre - deb)
-        if lanc and 0 < abs(dif) <= 0.10:
-            lado = "credito" if dif > 0 else "debito"
-            alvo = max((x for x in lanc if x["tipo"] == lado), key=lambda x: x["valor"])
-            alvo["valor"] = _r2(alvo["valor"] - abs(dif))
-            alvo["ajuste_centavos"] = -abs(dif)
-        lanc.sort(key=lambda x: (x["tipo"] != "debito", -x["valor"]))
-        L = lojas.setdefault(v["loja_id"], {"loja_id": v["loja_id"], "nome": v["loja_nome"], "trocas": [], "alertas": []})
-        L["trocas"].append({
-            "id": hashlib.md5(f"troca|{v['loja_id']}|{v['cupom']}".encode()).hexdigest()[:12],
-            "venda": v, "devolucoes": ds, "ambiguo": ambiguo,
-            "mesma_marca": not lanc, "lancamentos": lanc,
-            "diferenca": _r2(v["total"] + sum(d["total"] for d in ds)),
-        })
+        _add_troca(lojas, [v], ds, ambiguo)
+
+    # FALLBACK: grupo do dia — sobras (vendas do dia sem par + devolucoes livres) que
+    # fecham em zero viram UMA troca combinada (ex.: 1 devolucao usada em 2 vendas,
+    # ou 2 devolucoes usadas em 2 vendas em qualquer combinacao).
+    for loja_id in {v["loja_id"] for v in sem_devolucao}:
+        vs = [v for v in sem_devolucao if v["loja_id"] == loja_id]
+        livres = [d for d in devol if d["loja_id"] == loja_id and (d["loja_id"], d["cupom"]) not in usados
+                  and d["data"] <= dia_iso]
+        soma_v = _r2(sum(v["total"] for v in vs))
+        grupo = None
+        mesmo_dia = [d for d in livres if d["data"] == dia_iso]
+        if mesmo_dia and abs(soma_v + sum(d["total"] for d in mesmo_dia)) <= TOL:
+            grupo = mesmo_dia
+        else:
+            for d in sorted(livres, key=lambda d: (d["data"], d["cupom"]), reverse=True):
+                if abs(soma_v + d["total"]) <= TOL:
+                    grupo = [d]
+                    break
+        if grupo:
+            for d in grupo:
+                usados.add((d["loja_id"], d["cupom"]))
+            for v in vs:
+                sem_devolucao.remove(v)
+            _add_troca(lojas, sorted(vs, key=lambda v: v["cupom"]), grupo, len(vs) > 1 or len(grupo) > 1)
+
     for v in sem_devolucao:
         L = lojas.setdefault(v["loja_id"], {"loja_id": v["loja_id"], "nome": v["loja_nome"], "trocas": [], "alertas": []})
         L["alertas"].append({"tipo": "sem_devolucao", "venda": v,
