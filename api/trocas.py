@@ -308,12 +308,14 @@ def montar_trocas(linhas, dia_iso):
     pares, sem_devolucao = [], []
 
     for v in vendas:
+        # devolucao ate o dia da venda (no MESMO dia qualquer ordem de cupom vale:
+        # a devolucao pode ter sido registrada depois da venda)
         cands = [d for d in devol if d["loja_id"] == v["loja_id"] and (d["loja_id"], d["cupom"]) not in usados
-                 and abs(-d["total"] - v["total"]) <= TOL and (d["data"], d["cupom"]) <= (v["data"], v["cupom"])]
+                 and abs(-d["total"] - v["total"]) <= TOL and d["data"] <= v["data"]]
         if not cands:
             # combinacao de 2 devolucoes que somam o valor da venda
             livres = [d for d in devol if d["loja_id"] == v["loja_id"] and (d["loja_id"], d["cupom"]) not in usados
-                      and (d["data"], d["cupom"]) <= (v["data"], v["cupom"])]
+                      and d["data"] <= v["data"]]
             combo = None
             for i in range(len(livres)):
                 for j in range(i + 1, len(livres)):
@@ -326,8 +328,9 @@ def montar_trocas(linhas, dia_iso):
                     sem_devolucao.append(v)
                 continue
         else:
-            # a devolucao mais proxima (ultima antes da venda)
-            cands_sel = [cands[-1]]
+            # a devolucao mais proxima: mesmo dia primeiro, depois a ultima antes da venda
+            mesmo_dia = [d for d in cands if d["data"] == v["data"]]
+            cands_sel = [mesmo_dia[0] if mesmo_dia else cands[-1]]
         for d in cands_sel:
             usados.add((d["loja_id"], d["cupom"]))
         if v["data"] == dia_iso:
