@@ -487,12 +487,20 @@ def carregar_sellers(client):
     return sellers
 
 
-def casar_seller(expositor, sellers):
-    """Acha a marca na Zoop pelo nome. Retorna (seller|None, status, opcoes)."""
+def casar_seller(expositor, sellers, marketplace_pref=None):
+    """Acha a marca na Zoop pelo nome. Retorna (seller|None, status, opcoes).
+    Se houver mais de um cadastro com o mesmo nome (ex.: um por marketplace),
+    desempata pelo marketplace preferido (o das outras marcas da mesma loja)."""
     alvo = _norm(expositor)
     exatos = [s for s in sellers if _norm(s["fantasia"]) == alvo]
     if not exatos:
         exatos = [s for s in sellers if _norm(s["fantasia"]) and (alvo.startswith(_norm(s["fantasia"]) + " ") or _norm(s["fantasia"]).startswith(alvo + " "))]
+    if len(exatos) > 1 and marketplace_pref:
+        no_mkt = [s for s in exatos if s["marketplace_id"] == marketplace_pref]
+        if len(no_mkt) == 1:
+            return no_mkt[0], "ok", exatos
+    if len(exatos) > 1 and len({s["seller_id"] for s in exatos}) == 1 and len({s["marketplace_id"] for s in exatos}) == 1:
+        return exatos[0], "ok", exatos  # mesma linha repetida
     if len(exatos) == 1:
         return exatos[0], "ok", exatos
     if not exatos:
@@ -501,13 +509,24 @@ def casar_seller(expositor, sellers):
 
 
 def anexar_sellers(lojas, sellers):
+    from collections import Counter
+    mkt_geral = Counter(s["marketplace_id"] for s in sellers).most_common(1)
+    mkt_geral = mkt_geral[0][0] if mkt_geral else None
     for L in lojas:
-        for t in L["trocas"]:
-            for x in t["lancamentos"]:
-                s, st, ops = casar_seller(x["expositor"], sellers)
-                x["seller_status"] = st
-                x["seller"] = s
-                x["seller_opcoes"] = [{"fantasia": o["fantasia"], "nome": o["nome"], "seller_id": o["seller_id"][:6]} for o in ops][:4]
+        lancs = [x for t in L["trocas"] for x in t["lancamentos"]]
+        # passe 1: marcas sem ambiguidade definem o marketplace da loja
+        cnt = Counter()
+        for x in lancs:
+            s, st, _ = casar_seller(x["expositor"], sellers)
+            if st == "ok":
+                cnt[s["marketplace_id"]] += 1
+        pref = cnt.most_common(1)[0][0] if cnt else mkt_geral
+        # passe 2: resolve com o marketplace preferido
+        for x in lancs:
+            s, st, ops = casar_seller(x["expositor"], sellers, pref)
+            x["seller_status"] = st
+            x["seller"] = s
+            x["seller_opcoes"] = [{"fantasia": o["fantasia"], "nome": o["nome"], "seller_id": o["seller_id"][:6], "marketplace": o["marketplace_id"][:6]} for o in ops][:4]
 
 
 def _csrf(client):
