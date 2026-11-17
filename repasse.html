@@ -49,6 +49,21 @@ h2{font-family:var(--serif);font-weight:500;font-size:18px;margin:26px 0 10px}
   <div id="out"><div class="empty">Carregando ontem (venda) × hoje (repasse)… Ao mudar a data de venda, o repasse é sugerido como o dia seguinte.</div></div>
 </main>
 <script>
+// ============= SENHA NAS CHAMADAS /api =============
+(function(){
+  const K='conf_painel_token', f=window.fetch.bind(window);
+  window.fetch=function(u,o){
+    const api = typeof u==='string' && u.startsWith('/api/');
+    if(api){ o=Object.assign({},o||{}); o.headers=Object.assign({},o.headers||{},{'X-Painel-Token':localStorage.getItem(K)||''}); }
+    return f(u,o).then(r=>{
+      if(api && r.status===401 && !u.includes('ping=1')){
+        localStorage.removeItem(K); sessionStorage.removeItem('conf_cartoes_auth');
+        if(location.pathname!=='/') location.href='/'; else location.reload();
+      }
+      return r;
+    });
+  };
+})();
 if (sessionStorage.getItem('conf_cartoes_auth') !== 'ok') location.href = '/';
 const S = { d: null, sort: 'diferenca', dir: -1, so: true, tol: 1, q: '', loja: 'all' };
 const brl = v => (v < 0 ? '−' : '') + 'R$ ' + Math.abs(Number(v)).toLocaleString('pt-BR', { minimumFractionDigits: 2, maximumFractionDigits: 2 });

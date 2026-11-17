@@ -774,3 +774,57 @@ class handler(BaseHTTPRequestHandler):
         self.send_header("Access-Control-Allow-Origin", "*")
         self.end_headers()
         self.wfile.write(json.dumps(payload, ensure_ascii=False).encode("utf-8"))
+
+
+# ==================== PROTEÇÃO POR SENHA ====================
+# Se PAINEL_TOKEN estiver definido no Vercel, toda chamada precisa mandar a
+# mesma senha no cabeçalho X-Painel-Token (o painel manda sozinho depois do
+# login). Sem PAINEL_TOKEN, fica aberto como antes.
+import hmac as _hmac
+from urllib.parse import urlparse as _up, parse_qs as _pq
+
+_HandlerSemSenha = handler
+
+
+class handler(_HandlerSemSenha):
+    def _senha_ok(self):
+        esperado = os.environ.get("PAINEL_TOKEN", "").strip()
+        if not esperado:
+            return True
+        recebido = self.headers.get("X-Painel-Token") or \
+            (_pq(_up(self.path).query).get("token") or [""])[0]
+        return _hmac.compare_digest(str(recebido), esperado)
+
+    def _bloquear(self):
+        self.send_response(401)
+        self.send_header("Content-Type", "application/json; charset=utf-8")
+        self.end_headers()
+        self.wfile.write(b'{"error": "nao autorizado"}')
+
+    def _ping(self):
+        if "ping=1" in (_up(self.path).query or ""):
+            self.send_response(200)
+            self.send_header("Content-Type", "application/json; charset=utf-8")
+            self.end_headers()
+            self.wfile.write(b'{"ok": true}')
+            return True
+        return False
+
+    def do_GET(self):
+        if not self._senha_ok():
+            return self._bloquear()
+        if self._ping():
+            return
+        fn = getattr(_HandlerSemSenha, "do_GET", None)
+        if fn is None:
+            self.send_response(405)
+            self.end_headers()
+            return
+        return fn(self)
+
+    def do_POST(self):
+        if not self._senha_ok():
+            return self._bloquear()
+        if self._ping():
+            return
+        return _HandlerSemSenha.do_POST(self)

@@ -30,12 +30,19 @@ Browser → index.html (login + UI)
   - `LIVEPDV_BASE_URL` = `https://expositores.moombox.com.br` (opcional, é o default)
 - Deploy
 
-### 3. Mudar a senha do dashboard
-No `index.html`, linha que diz:
-```js
-const DASHBOARD_PASSWORD = 'cartoes2026';
-```
-Trocar por uma senha forte. Subir de novo.
+### 3. Senha do painel (protege as APIs)
+Defina `PAINEL_TOKEN` nas env vars do Vercel. Ela é a senha da tela de login e
+é exigida no cabeçalho `X-Painel-Token` por todas as APIs (`/api/*`).
+Sem `PAINEL_TOKEN`, as APIs ficam abertas (qualquer senha entra).
+
+### 4. Autocorreção e WhatsApp
+- `POST /api/autocorrigir?dry_run=1` mostra o que seria corrigido; sem `dry_run` aplica.
+  Só corrige match / código errado / código repetido com confiança alta e um único
+  candidato. Nunca apaga pagamento. Grava o ID da transação Zoop (como o botão
+  "Aceitar correção").
+- O agente mensageiro manda o resumo todo dia às 20:00 para 21 99297-1444 e só
+  corrige quando alguém responde `/corrigir`. No Railway: `CONFERENCIA_URL` e
+  `CONFERENCIA_TOKEN` (= `PAINEL_TOKEN`).
 
 ## ⚠️ IMPORTANTE: Ajustar os parsers HTML
 
@@ -86,7 +93,7 @@ Tolerância de valor: R$ 0,02 (ajustável em `TOLERANCIA_VALOR`).
 - Vercel free tier: timeout de 10s. Plano Hobby aumenta pra 60s. Se o Moombox demorar muito, pode dar erro.
 - Senha do Moombox fica nas env vars do Vercel — quem tiver acesso ao painel do Vercel vê.
 - Scraping pode quebrar se o Moombox mudar o HTML. Quando isso acontecer, ajustar os parsers.
-- A senha do dashboard (`DASHBOARD_PASSWORD`) está hardcoded no JS — qualquer um que abrir o "Ver código fonte" vê. É uma barreira fraca, não uma proteção real. Para algo mais sério, mover validação pro backend.
+- A senha é validada no servidor (`PAINEL_TOKEN`); não fica mais no código da página.
 
 ## Novos tipos de problema (correção semi-automática)
 

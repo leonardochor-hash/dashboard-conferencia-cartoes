@@ -37,9 +37,20 @@
       "config": {
         "maxDuration": 60
       }
+    },
+    {
+      "src": "api/autocorrigir.py",
+      "use": "@vercel/python",
+      "config": {
+        "maxDuration": 60
+      }
     }
   ],
   "routes": [
+    {
+      "src": "/api/autocorrigir",
+      "dest": "/api/autocorrigir.py"
+    },
     {
       "src": "/api/conferir",
       "dest": "/api/conferir.py"

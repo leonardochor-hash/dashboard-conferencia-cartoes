@@ -467,8 +467,22 @@ main { padding: 24px 32px; max-width: 1200px; margin: 0 auto; }
 </div>
 
 <script>
+// ============= SENHA NAS CHAMADAS /api =============
+(function(){
+  const K='conf_painel_token', f=window.fetch.bind(window);
+  window.fetch=function(u,o){
+    const api = typeof u==='string' && u.startsWith('/api/');
+    if(api){ o=Object.assign({},o||{}); o.headers=Object.assign({},o.headers||{},{'X-Painel-Token':localStorage.getItem(K)||''}); }
+    return f(u,o).then(r=>{
+      if(api && r.status===401 && !u.includes('ping=1')){
+        localStorage.removeItem(K); sessionStorage.removeItem('conf_cartoes_auth');
+        if(location.pathname!=='/') location.href='/'; else location.reload();
+      }
+      return r;
+    });
+  };
+})();
 // ============= CONFIG =============
-const DASHBOARD_PASSWORD = 'cartoes2026'; // mude isso depois
 const STORAGE_KEY = 'conf_cartoes_auth';
 const RESOLVED_KEY = 'conf_cartoes_resolved';
 const API_ENDPOINT = '/api/conferir';
@@ -486,17 +500,22 @@ function checkAuth() {
     showApp();
   }
 }
-function doLogin() {
+async function doLogin() {
   const pwd = document.getElementById('login-password').value;
-  if (pwd === DASHBOARD_PASSWORD) {
+  localStorage.setItem('conf_painel_token', pwd);
+  let ok = false;
+  try { ok = (await fetch('/api/aprovar?ping=1', { method: 'POST' })).status === 200; } catch (e) {}
+  if (ok) {
     sessionStorage.setItem(STORAGE_KEY, 'ok');
     showApp();
   } else {
+    localStorage.removeItem('conf_painel_token');
     document.getElementById('login-error').style.display = 'block';
   }
 }
 function logout() {
   sessionStorage.removeItem(STORAGE_KEY);
+  localStorage.removeItem('conf_painel_token');
   location.reload();
 }
 function showApp() {
