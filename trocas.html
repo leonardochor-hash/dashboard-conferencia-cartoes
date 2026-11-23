@@ -44,7 +44,7 @@ td.num{font-family:var(--mono);text-align:right;white-space:nowrap}th.num{text-a
   <div class="actions">
     <a class="btn" href="/">← Cartões</a>
     <a class="btn" href="/repasse">⚖ Repasse</a>
-    <select id="dia"></select>
+    <input type="date" id="dia" style="background:var(--surface);color:var(--text);border:1px solid var(--border);border-radius:8px;padding:8px 10px;font:inherit;color-scheme:dark">
     <button class="btn-primary" id="btn" onclick="carregar()">↻ Buscar trocas</button>
   </div>
 </header>
@@ -76,24 +76,32 @@ function loadFeitos() { try { S.feitos = JSON.parse(localStorage.getItem(KEY()) 
 function saveFeitos() { try { localStorage.setItem(KEY(), JSON.stringify(S.feitos)); } catch (e) {} }
 
 (function () {
-  const sel = document.getElementById('dia');
-  for (let i = 1; i <= 14; i++) {
-    const d = new Date(); d.setDate(d.getDate() - i);
-    const iso = d.toLocaleDateString('en-CA');
-    sel.insertAdjacentHTML('beforeend', `<option value="${iso}">${fdata(iso)}${i === 1 ? ' (ontem)' : ''}</option>`);
-  }
+  const d = new Date(); d.setDate(d.getDate() - 1);
+  const el = document.getElementById('dia');
+  el.value = d.toLocaleDateString('en-CA'); el.max = new Date().toLocaleDateString('en-CA');
 })();
+// escolha manual da marca na Zoop (quando o nome do PDV nao bate): expositor_id -> "seller_id|marketplace_id"
+const EKEY = 'trocas_escolhas_zoop';
+function loadEscolhas() { try { return JSON.parse(localStorage.getItem(EKEY) || '{}'); } catch (e) { return {}; } }
+function setEscolha(eid, val) { const e = loadEscolhas(); if (val) e[eid] = val; else delete e[eid]; try { localStorage.setItem(EKEY, JSON.stringify(e)); } catch (x) {} carregar(); }
+function escolherDaLista(inp, eid) {
+  const v = inp.value.trim(); if (!v) return;
+  const s = (S.d.sellers || []).find(o => rotulo(o) === v);
+  if (!s) { inp.style.borderColor = 'var(--bad)'; return; }
+  setEscolha(eid, s.id + '|' + s.mkt);
+}
+const rotulo = o => `${o.f} — ${o.n} [${o.mkt.slice(0, 4)}]`;
 
 async function carregar() {
   const btn = document.getElementById('btn'), main = document.getElementById('main');
   btn.disabled = true;
   main.innerHTML = '<div class="empty">Buscando trocas no LivePDV…</div>';
   try {
-    const r = await fetch('/api/trocas?data=' + document.getElementById('dia').value);
+    const r = await fetch('/api/trocas', { method: 'POST', headers: { 'Content-Type': 'application/json' }, body: JSON.stringify({ data: document.getElementById('dia').value, escolhas: loadEscolhas() }) });
     const d = await r.json().catch(() => null);
     if (!r.ok || !d) throw new Error((d && d.error) || 'HTTP ' + r.status);
     S.d = d; loadFeitos();
-    if (!d.lojas.find(l => l.loja_id === S.loja)) S.loja = (d.lojas.find(l => pend(l)) || d.lojas[0] || {}).loja_id;
+    if (S.loja !== 'todas' && !d.lojas.find(l => l.loja_id === S.loja)) S.loja = 'todas';
     document.getElementById('sub').textContent = `${fdata(d.data_referencia)} · ${d.linhas} linhas de troca lidas (devoluções buscadas desde ${fdata(d.janela[0])}) · líquido ${Math.round(d.pct_liquido * 100)}%`;
     render();
   } catch (e) {
@@ -109,19 +117,25 @@ function estadoTag(x) {
   return `<span class="tag warn">a lançar</span> <button class="copy" onclick="copiar(this,'${num(x.valor)}')">copiar</button>`;
 }
 function zoopTxt(x) {
-  if (x.seller_status === 'ok') return `<span style="color:var(--ok)">Zoop: ${esc(x.seller.fantasia)} (${esc(x.seller.nome)})</span>`;
-  if (x.seller_status === 'ambiguo') return `<span style="color:var(--warn)">Zoop: mais de uma marca com esse nome (${x.seller_opcoes.map(o => esc(o.fantasia)).join(' / ')}) — lançar à mão</span>`;
-  return '<span style="color:var(--bad)">Zoop: marca não cadastrada — não dá para lançar</span>';
+  if (x.seller_status === 'ok') {
+    const via = x.seller_via === 'cnpj' ? ' · achada pelo CNPJ' : x.seller_via === 'manual' ? ` · escolhida à mão <button class="copy" onclick="setEscolha('${x.expositor_id}',null)">trocar</button>` : '';
+    return `<span style="color:var(--ok)">Zoop: ${esc(x.seller.fantasia)} (${esc(x.seller.nome)})</span><span style="color:var(--dim)">${via}</span>`;
+  }
+  if (x.estado !== 'a_lancar' || S.feitos[x.id]) return '<span style="color:var(--dim)">Zoop: sem cadastro automático</span>';
+  const motivo = x.seller_status === 'ambiguo' ? `mais de um cadastro possível (${x.seller_opcoes.map(o => esc(o.fantasia)).join(' / ')})` : 'nome e CNPJ não encontrados na Zoop';
+  const dl = 'dl_' + x.expositor_id;
+  return `<span style="color:var(--bad)">Zoop: ${motivo} — escolha a marca:</span><div style="margin-top:4px"><input list="${dl}" placeholder="digite o nome na Zoop…" style="width:100%;max-width:380px;background:var(--bg);color:var(--text);border:1px solid var(--border);border-radius:6px;padding:5px 8px;font:inherit;font-size:12px" onchange="escolherDaLista(this,'${x.expositor_id}')"><datalist id="${dl}">${(S.d.sellers || []).map(o => `<option value="${esc(rotulo(o))}">`).join('')}</datalist></div>`;
 }
 async function lancarTroca(tid) {
-  const L = S.d.lojas.find(l => l.loja_id === S.loja), t = L.trocas.find(x => x.id === tid);
+  const { L, t } = acharTroca(tid);
   const itens = t.lancamentos.filter(x => x.estado === 'a_lancar' && !S.feitos[x.id] && x.seller_status === 'ok');
   const fora = t.lancamentos.filter(x => x.estado === 'a_lancar' && !S.feitos[x.id] && x.seller_status !== 'ok');
+  if (fora.length) return; // tudo-ou-nada: o botao ja fica bloqueado
   const txt = itens.map(x => `${x.tipo === 'debito' ? 'DÉBITO ' : 'CRÉDITO'} ${brl(x.valor).padStart(12)}  ${x.seller.fantasia}`).join('\n');
-  if (!confirm(`Lançar no LivePDV (loja ${L.loja_id}, observação "ajuste troca sistema"):\n\n${txt}${fora.length ? '\n\nFICAM DE FORA (lançar à mão): ' + fora.map(x => x.expositor).join(', ') : ''}\n\nConfirma?`)) return;
+  if (!confirm(`Lançar no LivePDV (loja ${L.loja_id}, observação "ajuste troca sistema"):\n\n${txt}\n\nConfirma?`)) return;
   S.msg[tid] = 'Lançando…'; render();
   try {
-    const r = await fetch('/api/trocas', { method: 'POST', headers: { 'Content-Type': 'application/json' }, body: JSON.stringify({ data: S.d.data_referencia, ids: itens.map(x => x.id) }) });
+    const r = await fetch('/api/trocas', { method: 'POST', headers: { 'Content-Type': 'application/json' }, body: JSON.stringify({ data: S.d.data_referencia, ids: itens.map(x => x.id), manuais: t.lancamentos.filter(x => S.feitos[x.id]).map(x => x.id), escolhas: loadEscolhas() }) });
     const d = await r.json().catch(() => null);
     if (!r.ok || !d) throw new Error((d && d.error) || 'HTTP ' + r.status);
     const linhas = d.resultados.map(z => {
@@ -132,8 +146,9 @@ async function lancarTroca(tid) {
   } catch (e) { S.msg[tid] = '<span style="color:var(--bad)">Erro: ' + esc(e.message) + ' — confira no LivePDV antes de tentar de novo.</span>'; }
   carregar();
 }
+function acharTroca(tid) { for (const L of S.d.lojas) { const t = L.trocas.find(x => x.id === tid); if (t) return { L, t }; } return {}; }
 async function transferirTroca(tid) {
-  const L = S.d.lojas.find(l => l.loja_id === S.loja), t = L.trocas.find(x => x.id === tid);
+  const { L, t } = acharTroca(tid);
   const itens = t.lancamentos.filter(x => x.estado === 'pendente');
   const faltando = t.lancamentos.filter(x => x.estado === 'a_lancar');
   const txt = itens.map(x => `${x.tipo === 'debito' ? 'DÉBITO ' : 'CRÉDITO'} ${brl(x.valor).padStart(12)}  ${x.expositor}`).join('\n');
@@ -141,7 +156,7 @@ async function transferirTroca(tid) {
   if (!confirm(`TRANSFERIR VALOR (efetiva na Zoop), loja ${L.loja_id}:\n\n${txt}${aviso}\n\nConfirma a transferência?`)) return;
   S.msg[tid] = 'Transferindo…'; render();
   try {
-    const r = await fetch('/api/trocas', { method: 'POST', headers: { 'Content-Type': 'application/json' }, body: JSON.stringify({ data: S.d.data_referencia, acao: 'transferir', ids: itens.map(x => x.id) }) });
+    const r = await fetch('/api/trocas', { method: 'POST', headers: { 'Content-Type': 'application/json' }, body: JSON.stringify({ data: S.d.data_referencia, acao: 'transferir', ids: itens.map(x => x.id), escolhas: loadEscolhas() }) });
     const d = await r.json().catch(() => null);
     if (!r.ok || !d) throw new Error((d && d.error) || 'HTTP ' + r.status);
     S.msg[tid] = d.resultados.map(z => {
@@ -161,9 +176,14 @@ function render() {
   if (!D.lojas.length) { main.innerHTML = h + '<div class="empty">Nenhuma venda paga com troca neste dia.</div>'; return; }
   const tot = D.total_dia || 0, zero = Math.abs(tot) <= 0.05;
   h += `<div class="card ${zero ? '' : 'alert'}" style="display:flex;justify-content:space-between;gap:10px;flex-wrap:wrap;align-items:center"><div><div style="color:var(--muted);font-size:12px;text-transform:uppercase;letter-spacing:.04em">Conferência do dia · total de trocas</div><div style="font-family:var(--mono);font-size:22px;margin-top:4px;color:${zero ? 'var(--ok)' : 'var(--warn)'}">${brl(tot)}</div></div><div style="font-size:13px;color:var(--muted);max-width:520px">${zero ? '✓ Fecha em zero: tudo que foi devolvido foi usado em compra no mesmo dia.' : '⚠ Não fecha em zero. Por loja: ' + D.lojas.filter(l => !l.fecha_zero).map(l => `<b style="color:var(--warn)">${esc(l.nome)} ${brl(l.total_dia)}</b>`).join(' · ') + '. Positivo = venda com troca sem devolução no dia; negativo = vale em aberto.'}</div></div>`;
-  h += '<div class="lojas">' + D.lojas.map(l => { const n = pend(l); return `<button class="loja ${l.loja_id === S.loja ? 'on' : ''}" onclick="S.loja=${l.loja_id};render()">${l.loja_id} · ${esc(l.nome)}<span class="n ${n ? '' : 'zero'}">${n || '✓'}</span></button>`; }).join('') + '</div>';
+  const nTot = D.lojas.reduce((a, l) => a + pend(l), 0);
+  h += '<div class="lojas">' + `<button class="loja ${S.loja === 'todas' ? 'on' : ''}" onclick="S.loja='todas';render()">Todas<span class="n ${nTot ? '' : 'zero'}">${nTot || '✓'}</span></button>` + D.lojas.map(l => { const n = pend(l); return `<button class="loja ${l.loja_id === S.loja ? 'on' : ''}" onclick="S.loja=${l.loja_id};render()">${l.loja_id} · ${esc(l.nome)}<span class="n ${n ? '' : 'zero'}">${n || '✓'}</span></button>`; }).join('') + '</div>';
   h += '<div class="legend"><b>1 · Lançar</b> cria os <span class="deb">débitos</span> e <span class="cred">créditos</span> (Relatório Saldo Zoop, observação “ajuste troca sistema”). <b>2 · Transferir</b> efetiva cada linha, como “Transferir Valor” no Extrato Geral de Vendas e Transferências. O status vem do próprio LivePDV, então nada é lançado ou transferido duas vezes.</div>';
-  const L = D.lojas.find(l => l.loja_id === S.loja);
+  const LS = S.loja === 'todas' ? D.lojas : D.lojas.filter(l => l.loja_id === S.loja);
+  let vazio = true;
+  for (const L of LS) {
+  if (L.trocas.length || L.alertas.length) vazio = false;
+  if (S.loja === 'todas' && (L.trocas.length || L.alertas.length)) h += `<div style="font-family:var(--serif);font-size:17px;margin:18px 0 10px">${L.loja_id} · ${esc(L.nome)} <span style="font-family:var(--sans);font-size:12px;color:${L.fecha_zero ? 'var(--ok)' : 'var(--warn)'}">total trocas do dia ${brl(L.total_dia)}</span></div>`;
   L.alertas.filter(a => a.tipo === 'sem_devolucao').forEach(a => {
     h += `<div class="card alert"><div class="top"><div class="flow">Venda <b>${a.venda.cupom}</b> paga com troca · ${brl(a.venda.total)}</div><span class="tag warn">investigar</span></div><div class="obs">${esc(a.motivo)}. Pode ser troca lançada em duplicidade ou devolução feita em outra loja.</div></div>`;
   });
@@ -171,7 +191,7 @@ function render() {
     const ids = t.lancamentos.map(x => x.id), feito = ids.length && t.lancamentos.every(fim);
     const dev = t.devolucoes.map(d => `<b>${d.cupom}</b>${d.data !== t.venda.data ? ' (' + fdata(d.data) + ')' : ''}`).join(' + ');
     const tag = t.mesma_marca ? '<span class="tag ok">mesma marca · nada a lançar</span>' : feito ? '<span class="tag ok">concluída</span>' : t.lancamentos.some(x => x.estado === 'pendente') ? '<span class="tag info">falta transferir</span>' : t.ambiguo ? '<span class="tag warn">confira o par</span>' : '<span class="tag warn">a lançar</span>';
-    h += `<div class="card ${t.mesma_marca ? 'same' : feito ? 'done' : ''}"><div class="top"><div class="flow">Devolução ${dev} → venda <b>${t.venda.cupom}</b> · ${brl(t.venda.total)}</div>${tag}</div>`;
+    h += `<div class="card ${t.mesma_marca ? 'same' : feito ? 'done' : ''}"><div class="top"><div class="flow">${S.loja === 'todas' ? `<span style="color:var(--dim)">${esc(L.nome)} · </span>` : ''}Devolução ${dev} → venda <b>${t.venda.cupom}</b> · ${brl(t.venda.total)}</div>${tag}</div>`;
     if (t.lancamentos.length) {
       h += `<table><tr><th>Lançamento</th><th>Marca</th><th class="num hide-sm">Parte da troca</th><th class="num">Valor líquido</th><th></th></tr>` +
         t.lancamentos.map(x => `<tr><td class="${x.tipo === 'debito' ? 'deb' : 'cred'}">${x.tipo === 'debito' ? 'Débito' : 'Crédito'}</td><td>${x.expositor_id} · ${esc(x.expositor)}<div style="color:var(--dim);font-size:12px">cupom ${x.cupom} · ${zoopTxt(x)}</div></td><td class="num hide-sm">${brl(x.bruto)}</td><td class="num">${brl(x.valor)}${x.ajuste_centavos ? `<div style="color:var(--dim);font-size:11px" title="arredondamento para o saldo fechar em zero">${num(x.ajuste_centavos)} arred.</div>` : ''}</td><td style="white-space:nowrap">${estadoTag(x)}</td></tr>`).join('') + '</table>';
@@ -182,21 +202,24 @@ function render() {
       const saldoPode = Math.round((pode.filter(x => x.tipo === 'credito').reduce((a, x) => a + x.valor, 0) - pode.filter(x => x.tipo === 'debito').reduce((a, x) => a + x.valor, 0)) * 100) / 100;
       h += `<table style="margin-top:0"><tr><td style="border-top:2px solid var(--border)"><b>Saldo</b></td><td style="border-top:2px solid var(--border);color:var(--muted);font-size:12px">créditos ${brl(sCre)} − débitos ${brl(sDeb)}</td><td class="num hide-sm" style="border-top:2px solid var(--border)"></td><td class="num" style="border-top:2px solid var(--border);font-weight:600;color:${Math.abs(saldo) < 0.005 ? 'var(--ok)' : 'var(--bad)'}">${brl(saldo)} ${Math.abs(saldo) < 0.005 ? '✓' : '✗'}</td><td style="border-top:2px solid var(--border)"></td></tr></table>`;
       if (Math.abs(saldo) >= 0.005) h += `<div class="obs" style="color:var(--bad)">Saldo diferente de zero — não lance antes de entender a diferença.</div>`;
-      else if (Math.abs(saldoPode) >= 0.005) h += `<div class="obs" style="color:var(--warn)">Só dá para lançar automático as marcas com cadastro na Zoop: o automático fica com saldo ${brl(saldoPode)} até a(s) marca(s) em vermelho serem lançadas à mão.</div>`;
+      const semMarca = t.lancamentos.filter(x => x.estado === 'a_lancar' && !S.feitos[x.id] && x.seller_status !== 'ok');
+      if (Math.abs(saldo) < 0.005 && semMarca.length) h += `<div class="obs" style="color:var(--warn)">Bloqueado até resolver ${semMarca.map(x => '<b>' + esc(x.expositor) + '</b>').join(', ')}: escolha a marca na Zoop acima, ou lance à mão no LivePDV e clique “Já resolvi à mão”. A troca só é lançada inteira, para o saldo fechar em zero.</div>`;
       h += `<div class="obs">Observação: ajuste troca sistema <button class="copy" onclick="copiar(this,'ajuste troca sistema')">copiar</button>${t.ambiguo ? '<br><span style="color:var(--warn)">Há mais de uma devolução com esse valor — confirme o cupom de devolução antes de lançar.</span>' : ''}${Math.abs(t.diferenca) >= 0.01 ? `<br>Diferença de arredondamento entre devolução e venda: ${brl(t.diferenca)}` : ''}</div>`;
       const aLancar = t.lancamentos.filter(x => x.estado === 'a_lancar' && !S.feitos[x.id]);
       const prontos = aLancar.filter(x => x.seller_status === 'ok');
       const semZoop = aLancar.filter(x => x.seller_status !== 'ok');
       const pendTr = t.lancamentos.filter(x => x.estado === 'pendente');
       const manuais = t.lancamentos.filter(x => S.feitos[x.id] && x.estado !== 'baixado').map(x => x.id);
-      h += `<div class="foot" style="gap:8px;flex-wrap:wrap">${feito ? (manuais.length ? `<button onclick='desmarcar(${JSON.stringify(manuais)})'>Desfazer marcação manual</button>` : '') : `${semZoop.length ? `<button onclick='marcar("${t.id}",${JSON.stringify(semZoop.map(x => x.id))})'>Já resolvi à mão (${semZoop.length})</button>` : ''}<button class="btn-primary" ${prontos.length ? '' : 'disabled'} onclick='lancarTroca("${t.id}")'>⚡ 1 · Lançar ${prontos.length}</button><button class="btn-primary" ${pendTr.length ? '' : 'disabled'} onclick='transferirTroca("${t.id}")'>⇄ 2 · Transferir ${pendTr.length}</button>`}</div>`;
+      h += `<div class="foot" style="gap:8px;flex-wrap:wrap">${feito ? (manuais.length ? `<button onclick='desmarcar(${JSON.stringify(manuais)})'>Desfazer marcação manual</button>` : '') : `${semZoop.length ? `<button onclick='marcar("${t.id}",${JSON.stringify(semZoop.map(x => x.id))})'>Já resolvi à mão (${semZoop.length})</button>` : ''}<button class="btn-primary" ${prontos.length && !semZoop.length ? '' : 'disabled'} onclick='lancarTroca("${t.id}")'>⚡ 1 · Lançar ${prontos.length}</button><button class="btn-primary" ${pendTr.length ? '' : 'disabled'} onclick='transferirTroca("${t.id}")'>⇄ 2 · Transferir ${pendTr.length}</button>`}</div>`;
       if (S.msg[t.id]) h += `<div class="obs">${S.msg[t.id]}</div>`;
     }
     h += '</div>';
   });
-  const abertos = L.alertas.filter(a => a.tipo === 'vale_aberto');
-  if (abertos.length) h += `<div class="legend">Vale em aberto (devolvido hoje, ainda sem compra): ${abertos.map(a => `<b>${a.venda.cupom}</b> ${brl(-a.venda.total)}`).join(' · ')}</div>`;
-  if (!L.trocas.length && !L.alertas.length) h += '<div class="empty">Nada nesta loja.</div>';
+  L.alertas.filter(a => a.tipo === 'vale_aberto').forEach(a => {
+    h += `<div class="card"><div class="top"><div class="flow">${S.loja === 'todas' ? `<span style="color:var(--dim)">${esc(L.nome)} · </span>` : ''}Devolução <b>${a.venda.cupom}</b> · ${brl(-a.venda.total)} · ${a.venda.marcas.map(m => esc(m.expositor)).join(', ')}</div><span class="tag info">vale em aberto</span></div><div class="obs">Devolvido neste dia e ainda sem compra paga com troca — nada a lançar até o vale ser usado.</div></div>`;
+  });
+  }
+  if (vazio) h += '<div class="empty">Nada nesta loja.</div>';
   main.innerHTML = h;
 }
 carregar();

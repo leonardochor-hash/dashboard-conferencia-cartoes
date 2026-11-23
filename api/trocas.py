@@ -521,12 +521,104 @@ def anexar_sellers(lojas, sellers):
             if st == "ok":
                 cnt[s["marketplace_id"]] += 1
         pref = cnt.most_common(1)[0][0] if cnt else mkt_geral
+        L["_mkt_pref"] = pref
         # passe 2: resolve com o marketplace preferido
         for x in lancs:
             s, st, ops = casar_seller(x["expositor"], sellers, pref)
             x["seller_status"] = st
             x["seller"] = s
             x["seller_opcoes"] = [{"fantasia": o["fantasia"], "nome": o["nome"], "seller_id": o["seller_id"][:6], "marketplace": o["marketplace_id"][:6]} for o in ops][:4]
+
+
+def _cnpj_expositor(client, eid):
+    """CNPJ do expositor (tela Configuracoes > Expositores)."""
+    r = client.session.get(f"{BASE_URL}/fornecedores/update", params={"id": eid}, timeout=20)
+    if r.status_code >= 400:
+        return ""
+    soup = BeautifulSoup(r.text, "html.parser")
+    i = soup.find("input", {"name": "Fornecedores[cnpj]"})
+    return re.sub(r"\D", "", (i.get("value") if i else "") or "")
+
+
+def _cadastros_por_cnpj(client, cnpj):
+    """Cadastro da marca (boxstore) pelo CNPJ: razao social e nome fantasia."""
+    if len(cnpj) < 8:
+        return []
+    r = client.session.get(f"{BASE_URL}/boxstore/cadastro", params={"CadastroSearch[cnpj]": cnpj[:8]}, timeout=20)
+    if r.status_code >= 400:
+        return []
+    out = []
+    for tr in BeautifulSoup(r.text, "html.parser").select("table tbody tr"):
+        tds = [td.get_text(" ", strip=True) for td in tr.find_all("td")]
+        if len(tds) > 4 and re.sub(r"\D", "", tds[2]) == cnpj:
+            out.append({"razao": tds[3], "fantasia": tds[4]})
+    return out
+
+
+def casar_por_cnpj(client, eid, sellers, marketplace_pref=None):
+    """2a tentativa quando o nome do PDV nao bate com a Zoop: CNPJ do expositor ->
+    cadastro da marca (razao social / fantasia) -> cadastro na Zoop."""
+    cnpj = _cnpj_expositor(client, eid)
+    if not cnpj:
+        return None, []
+    alvos_nome, alvos_fant = set(), set()
+    for c in _cadastros_por_cnpj(client, cnpj):
+        alvos_nome.add(_norm(c["razao"]))
+        alvos_fant.add(_norm(c["fantasia"]))
+    achados = [s for s in sellers
+               if cnpj[:8] in re.sub(r"\D", "", s["nome"])
+               or (_norm(s["nome"]) and _norm(s["nome"]) in alvos_nome)
+               or (_norm(s["fantasia"]) and _norm(s["fantasia"]) in alvos_fant)]
+    unicos = {(s["seller_id"], s["marketplace_id"]): s for s in achados}
+    achados = list(unicos.values())
+    if len(achados) > 1 and marketplace_pref:
+        no_mkt = [s for s in achados if s["marketplace_id"] == marketplace_pref]
+        if len(no_mkt) == 1:
+            return no_mkt[0], achados
+    return (achados[0] if len(achados) == 1 else None), achados
+
+
+def resolver_pendentes(client, lojas, sellers, escolhas=None):
+    """Para as marcas que o nome nao achou: aplica a escolha manual (se veio do
+    painel) ou tenta pelo CNPJ. Cache por expositor para nao repetir consultas."""
+    escolhas = {str(k): v for k, v in (escolhas or {}).items()}
+    idx = {(s["seller_id"], s["marketplace_id"]): s for s in sellers}
+    cache = {}
+    for L in lojas:
+        pref = L.get("_mkt_pref")
+        for t in L["trocas"]:
+            for x in t["lancamentos"]:
+                if x["seller_status"] == "ok":
+                    continue
+                esc = escolhas.get(str(x["expositor_id"]))
+                if esc:
+                    sid, _, mkt = str(esc).partition("|")
+                    s = idx.get((sid, mkt))
+                    if s:
+                        x.update(seller=s, seller_status="ok", seller_via="manual")
+                        continue
+                eid = x["expositor_id"]
+                if eid not in cache:
+                    try:
+                        cache[eid] = casar_por_cnpj(client, eid, sellers, pref)
+                    except Exception as e:  # consulta extra nao pode derrubar a tela
+                        log(f"cnpj expositor {eid}: {e}")
+                        cache[eid] = (None, [])
+                s, ops = cache[eid]
+                if s:
+                    x.update(seller=s, seller_status="ok", seller_via="cnpj")
+                elif ops:
+                    x["seller_status"] = "ambiguo"
+                    x["seller_opcoes"] = [{"fantasia": o["fantasia"], "nome": o["nome"], "seller_id": o["seller_id"][:6], "marketplace": o["marketplace_id"][:6]} for o in ops][:4]
+
+
+def troca_completa(t, ids, manuais):
+    """Tudo-ou-nada: a troca so pode ser lancada se TODA linha a lancar esta
+    no pedido com marca na Zoop, ou foi marcada como resolvida a mao."""
+    faltam = [x["expositor"] for x in t["lancamentos"]
+              if x["estado"] == "a_lancar" and x["id"] not in manuais
+              and not (x["id"] in ids and x["seller_status"] == "ok")]
+    return faltam
 
 
 def _csrf(client):
@@ -706,6 +798,7 @@ class handler(BaseHTTPRequestHandler):
             lojas = montar_trocas(linhas, dia.isoformat())
             sellers = carregar_sellers(client)
             anexar_sellers(lojas, sellers)
+            resolver_pendentes(client, lojas, sellers, (body or {}).get("escolhas"))
             comps = carregar_compensacoes(client, dia)
             anexar_compensacoes(lojas, comps)
 
@@ -733,15 +826,22 @@ class handler(BaseHTTPRequestHandler):
             if body is not None and body.get("ids"):
                 # LANCAR: so os ids pedidos, recalculados aqui no servidor (nao confia no navegador)
                 ids = set(body["ids"])
+                manuais = set(body.get("manuais") or [])
                 dry = bool(body.get("dry_run"))
                 csrf = None if dry else _csrf_de(client, SALDO_URL)
                 resultados = []
                 for L in lojas:
                     for t in L["trocas"]:
-                        for x in t["lancamentos"]:
-                            if x["id"] not in ids:
-                                continue
+                        pedidos = [x for x in t["lancamentos"] if x["id"] in ids]
+                        if not pedidos:
+                            continue
+                        faltam = troca_completa(t, ids, manuais)
+                        for x in pedidos:
                             item = {"id": x["id"], "tipo": x["tipo"], "expositor": x["expositor"], "valor": x["valor"], "cupom": x["cupom"]}
+                            if faltam and x["estado"] == "a_lancar":
+                                item.update(ok=False, motivo="troca nao lancada: falta resolver " + ", ".join(faltam) + " (o saldo nao fecharia em zero)")
+                                resultados.append(item)
+                                continue
                             if x["estado"] != "a_lancar":
                                 item.update(ok=True, motivo="ja estava lancado (nao duplicou)")
                             elif x["seller_status"] != "ok":
@@ -762,6 +862,8 @@ class handler(BaseHTTPRequestHandler):
                 "lojas": lojas,
                 "total_dia": _r2(sum(l["total_dia"] for l in lojas)),
                 "avisos": client.avisos,
+                "sellers": ([{"id": x["seller_id"], "mkt": x["marketplace_id"], "f": x["fantasia"], "n": x["nome"]} for x in sellers]
+                            if any(x["seller_status"] != "ok" for L in lojas for t in L["trocas"] for x in t["lancamentos"]) else []),
             })
         except Exception as e:
             tb = traceback.format_exc()
